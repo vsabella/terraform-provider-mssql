@@ -86,9 +86,6 @@ func (r *MssqlUserResource) Schema(ctx context.Context, req resource.SchemaReque
 			"login": schema.StringAttribute{
 				MarkdownDescription: "Login to associate to this user",
 				Optional:            true,
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.RequiresReplace(),
-				},
 			},
 			"sid": schema.StringAttribute{
 				MarkdownDescription: "Set custom SID for the user",
@@ -212,6 +209,7 @@ func (r *MssqlUserResource) Update(ctx context.Context, req resource.UpdateReque
 	user := mssql.UpdateUser{
 		Id:            data.Id.ValueString(),
 		Password:      data.Password.ValueString(),
+		Login:         data.Login.ValueString(),
 		DefaultSchema: data.DefaultSchema.ValueString(),
 	}
 

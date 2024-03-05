@@ -87,6 +87,8 @@ func (m client) CreateUser(ctx context.Context, create CreateUser) (User, error)
 
 func buildCreateUser(create CreateUser) (string, []any, error) {
 	var cmdBuilder strings.Builder
+	var optionsBuilder strings.Builder
+
 	var args []any
 
 	if create.Login != "" && create.Password != "" {
@@ -124,19 +126,11 @@ func buildCreateUser(create CreateUser) (string, []any, error) {
 	}
 
 	// Begin Options. Easy since we make DefaultSchema required
-	cmdBuilder.WriteString(" + ' WITH DEFAULT_SCHEMA = ' + QUOTENAME(@defaultSchema)")
-	args = append(args, sql.Named("defaultSchema", create.DefaultSchema))
+	addOption(&optionsBuilder, &args, "DEFAULT_SCHEMA", create.DefaultSchema, true)
+	addOption(&optionsBuilder, &args, "PASSWORD", create.Password, false)
+	addOption(&optionsBuilder, &args, "SID", create.Sid, false)
 
-	if create.Password != "" {
-		cmdBuilder.WriteString(" + ', PASSWORD = ' + QUOTENAME(@password, '''')")
-		args = append(args, sql.Named("password", create.Password))
-
-		if create.Sid != "" {
-			cmdBuilder.WriteString(" + ', SID = ' + QUOTENAME(@sid, '''')")
-			args = append(args, sql.Named("sid", create.Sid))
-		}
-	}
-
+	cmdBuilder.WriteString(optionsBuilder.String())
 	cmdBuilder.WriteString(";\n")
 	cmdBuilder.WriteString("EXEC (@sql);")
 	return cmdBuilder.String(), args, nil
@@ -167,6 +161,7 @@ func (m client) UpdateUser(ctx context.Context, update UpdateUser) (User, error)
 
 	addOption(&optionsBuilder, &args, "PASSWORD", update.Password, false)
 	addOption(&optionsBuilder, &args, "DEFAULT_SCHEMA", update.DefaultSchema, true)
+	addOption(&optionsBuilder, &args, "LOGIN", update.Login, true)
 
 	if optionsBuilder.Len() > 0 {
 

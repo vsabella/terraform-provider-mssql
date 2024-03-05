@@ -1,25 +1,12 @@
 package mssql
 
 import (
-	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"reflect"
 	"strings"
 	"testing"
 )
-
-func localConnect(ctx context.Context) (*sql.DB, error) {
-	const host = "127.0.0.1"
-	const port = 1433
-	const username = "sa"
-	const password = "Ax@0n9A9REQF4TCgdKP0KrZC"
-
-	connString := fmt.Sprintf("server=%s;user id=%s;password=%s;port=%d;database=iam", host, username, password, port)
-	conn, err := sql.Open("sqlserver", connString)
-	return conn, err
-}
 
 func Test_buildCreateUser(t *testing.T) {
 	type args struct {
@@ -42,8 +29,8 @@ func Test_buildCreateUser(t *testing.T) {
 				Login:         "",
 				DefaultSchema: "dbo",
 			}},
-			want:  `DECLARE @sql NVARCHAR(max);SET @sql = 'CREATE USER ' + QUOTENAME(@username) + ' WITH DEFAULT_SCHEMA = ' + QUOTENAME(@defaultSchema) + ', PASSWORD = ' + QUOTENAME(@password, '''');EXEC (@sql);`,
-			want1: []any{sql.Named("username", "user"), sql.Named("defaultSchema", "dbo"), sql.Named("password", "password")},
+			want:  `DECLARE @sql NVARCHAR(max);SET @sql = 'CREATE USER ' + QUOTENAME(@username) + 'WITH ' + 'DEFAULT_SCHEMA = ' + QUOTENAME(@default_schema) + ', ' + 'PASSWORD = ' + QUOTENAME(@password,'''');EXEC (@sql);`,
+			want1: []any{sql.Named("username", "user"), sql.Named("default_schema", "dbo"), sql.Named("password", "password")},
 		},
 		{
 			name: "User with Password and SID",
@@ -55,8 +42,8 @@ func Test_buildCreateUser(t *testing.T) {
 				Login:         "",
 				DefaultSchema: "dbo",
 			}},
-			want:  `DECLARE @sql NVARCHAR(max);SET @sql = 'CREATE USER ' + QUOTENAME(@username) + ' WITH DEFAULT_SCHEMA = ' + QUOTENAME(@defaultSchema) + ', PASSWORD = ' + QUOTENAME(@password, '''') + ', SID = ' + QUOTENAME(@sid, '''');EXEC (@sql);`,
-			want1: []any{sql.Named("username", "user"), sql.Named("defaultSchema", "dbo"), sql.Named("password", "password"), sql.Named("sid", "SOMESID")},
+			want:  `DECLARE @sql NVARCHAR(max);SET @sql = 'CREATE USER ' + QUOTENAME(@username) + 'WITH ' + 'DEFAULT_SCHEMA = ' + QUOTENAME(@default_schema) + ', ' + 'PASSWORD = ' + QUOTENAME(@password,'''') + ', ' + 'SID = ' + QUOTENAME(@sid,'''');EXEC (@sql);`,
+			want1: []any{sql.Named("username", "user"), sql.Named("default_schema", "dbo"), sql.Named("password", "password"), sql.Named("sid", "SOMESID")},
 		},
 		{
 			name: "User with Login",
@@ -68,8 +55,8 @@ func Test_buildCreateUser(t *testing.T) {
 				Login:         "LOGIN",
 				DefaultSchema: "dbo",
 			}},
-			want:  `DECLARE @sql NVARCHAR(max);SET @sql = 'CREATE USER ' + QUOTENAME(@username) + ' FROM LOGIN ' + QUOTENAME(@login) + ' WITH DEFAULT_SCHEMA = ' + QUOTENAME(@defaultSchema);EXEC (@sql);`,
-			want1: []any{sql.Named("username", "user"), sql.Named("login", "LOGIN"), sql.Named("defaultSchema", "dbo")},
+			want:  `DECLARE @sql NVARCHAR(max);SET @sql = 'CREATE USER ' + QUOTENAME(@username) + ' FROM LOGIN ' + QUOTENAME(@login) + 'WITH ' + 'DEFAULT_SCHEMA = ' + QUOTENAME(@default_schema);EXEC (@sql);`,
+			want1: []any{sql.Named("username", "user"), sql.Named("login", "LOGIN"), sql.Named("default_schema", "dbo")},
 		},
 		{
 			name: "External User",
@@ -81,8 +68,8 @@ func Test_buildCreateUser(t *testing.T) {
 				Login:         "",
 				DefaultSchema: "dbo",
 			}},
-			want:  `DECLARE @sql NVARCHAR(max);SET @sql = 'CREATE USER ' + QUOTENAME(@username) + ' FROM EXTERNAL PROVIDER' + ' WITH DEFAULT_SCHEMA = ' + QUOTENAME(@defaultSchema);EXEC (@sql);`,
-			want1: []any{sql.Named("username", "bob@contoso.com"), sql.Named("defaultSchema", "dbo")},
+			want:  `DECLARE @sql NVARCHAR(max);SET @sql = 'CREATE USER ' + QUOTENAME(@username) + ' FROM EXTERNAL PROVIDER' + 'WITH ' + 'DEFAULT_SCHEMA = ' + QUOTENAME(@default_schema);EXEC (@sql);`,
+			want1: []any{sql.Named("username", "bob@contoso.com"), sql.Named("default_schema", "dbo")},
 		},
 		{
 			name: "Error No Default Schema",

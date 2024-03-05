@@ -31,5 +31,6 @@ type CreateUser struct {
 type UpdateUser struct {
 	Id            string
 	Password      string
+	Login         string
 	DefaultSchema string
 }
