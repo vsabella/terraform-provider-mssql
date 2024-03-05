@@ -13,6 +13,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/openaxon/terraform-provider-mssql/internal/core"
+	"github.com/openaxon/terraform-provider-mssql/internal/mssql"
 )
 
 // Ensure MssqlProvider satisfies various provider interfaces.
@@ -41,9 +42,10 @@ type SqlAuth struct {
 //}
 
 type MssqlProviderModel struct {
-	Host    types.String `tfsdk:"host"`
-	Port    types.Int64  `tfsdk:"port"`
-	SqlAuth *SqlAuth     `tfsdk:"sql_auth"`
+	Host     types.String `tfsdk:"host"`
+	Port     types.Int64  `tfsdk:"port"`
+	Database types.String `tfsdk:"database"`
+	SqlAuth  *SqlAuth     `tfsdk:"sql_auth"`
 }
 
 func (p *MssqlProvider) Metadata(ctx context.Context, req provider.MetadataRequest, resp *provider.MetadataResponse) {
@@ -61,6 +63,10 @@ func (p *MssqlProvider) Schema(ctx context.Context, req provider.SchemaRequest, 
 			"port": schema.Int64Attribute{
 				MarkdownDescription: "MSSQL Server Port. Default: `1433`",
 				Optional:            true,
+			},
+			"database": schema.StringAttribute{
+				MarkdownDescription: "Database to connect to.",
+				Required:            true,
 			},
 			"sql_auth": schema.SingleNestedAttribute{
 				Description: "When provided, SQL authentication will be used when connecting.",
@@ -92,7 +98,7 @@ func (p *MssqlProvider) Configure(ctx context.Context, req provider.ConfigureReq
 	if data.Host.IsUnknown() {
 		resp.Diagnostics.AddAttributeError(
 			path.Root("host"),
-			"Unknown MSSQL Server Host",
+			"Unknown Sql Server Host",
 			"The provider needs the hostname or IP address of Microsoft SQL Server.",
 		)
 	}
@@ -100,8 +106,16 @@ func (p *MssqlProvider) Configure(ctx context.Context, req provider.ConfigureReq
 	if data.Port.IsUnknown() {
 		resp.Diagnostics.AddAttributeError(
 			path.Root("host"),
-			"Unknown MSSQL Server Port",
+			"Unknown Sql Server Server Port",
 			"The provider needs the port of Microsoft SQL Server.",
+		)
+	}
+
+	if data.Database.IsUnknown() || data.Database.IsNull() || data.Database.ValueString() == "" {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("host"),
+			"Unknown Sql Server Database",
+			"The provider is designed for Contained Databases / Azure SQL and will only connect to a single database at a time.",
 		)
 	}
 
@@ -110,11 +124,8 @@ func (p *MssqlProvider) Configure(ctx context.Context, req provider.ConfigureReq
 	}
 
 	// Create Client Context
-	factory := core.NewMockClientFactory()
 	client := &core.ProviderData{
-		ClientFactory: func(ctx context.Context, db string) (core.SqlClient, error) {
-			return factory.GetClient(db), nil
-		},
+		Client: mssql.NewClient(data.Host.ValueString(), data.Port.ValueInt64(), data.Database.ValueString(), data.SqlAuth.Username.ValueString(), data.SqlAuth.Password.ValueString()),
 	}
 
 	resp.DataSourceData = client

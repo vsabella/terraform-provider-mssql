@@ -2,15 +2,21 @@ package provider
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	"github.com/openaxon/terraform-provider-mssql/internal/core"
+	"github.com/openaxon/terraform-provider-mssql/internal/mssql"
 )
 
 // Ensure provider defined types fully satisfy framework interfaces.
@@ -27,9 +33,11 @@ type MssqlUserResource struct {
 
 type MssqlUserResourceModel struct {
 	Id            types.String `tfsdk:"id"`
-	DB            types.String `tfsdk:"database"`
 	Username      types.String `tfsdk:"username"`
 	Password      types.String `tfsdk:"password"`
+	External      types.Bool   `tfsdk:"external"`
+	Login         types.String `tfsdk:"login"`
+	Sid           types.String `tfsdk:"sid"`
 	DefaultSchema types.String `tfsdk:"default_schema"`
 }
 
@@ -49,13 +57,12 @@ func (r *MssqlUserResource) Schema(ctx context.Context, req resource.SchemaReque
 					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
-			"database": schema.StringAttribute{
-				MarkdownDescription: "Database to add user to",
-				Required:            true,
-			},
 			"username": schema.StringAttribute{
 				MarkdownDescription: "MssqlUser configurable attribute with default value",
 				Required:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
 			},
 			"password": schema.StringAttribute{
 				Required:  true,
@@ -67,11 +74,35 @@ func (r *MssqlUserResource) Schema(ctx context.Context, req resource.SchemaReque
 					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
-			"default_schema": schema.StringAttribute{
-				Optional: true,
+			"external": schema.BoolAttribute{
+				MarkdownDescription: "Is this an external user (like Microsoft EntraID)",
+				Optional:            true,
+				Computed:            true,
+				Default:             booldefault.StaticBool(false),
+				PlanModifiers: []planmodifier.Bool{
+					boolplanmodifier.RequiresReplace(),
+				},
+			},
+			"login": schema.StringAttribute{
+				MarkdownDescription: "Login to associate to this user",
+				Optional:            true,
 				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
+			},
+			"sid": schema.StringAttribute{
+				MarkdownDescription: "Set custom SID for the user",
+				Optional:            true,
+				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
 					stringplanmodifier.UseStateForUnknown(),
 				},
+			},
+			"default_schema": schema.StringAttribute{
+				Optional: true,
+				Computed: true,
+				Default:  stringdefault.StaticString("dbo"),
 			},
 		},
 	}
@@ -106,30 +137,44 @@ func (r *MssqlUserResource) Create(ctx context.Context, req resource.CreateReque
 		return
 	}
 
-	// Get the SQL Client for this DB
-	client, err := r.ctx.ClientFactory(ctx, data.DB.ValueString())
-	if err != nil {
-		resp.Diagnostics.AddError("connection error", fmt.Sprintf("unable to get sql connection to %s. error: %s", data.DB.ValueString(), err))
-		return
-	}
-
-	user := core.User{
+	create := mssql.CreateUser{
 		Username:      data.Username.ValueString(),
 		Password:      data.Password.ValueString(),
+		Sid:           data.Sid.ValueString(),
+		External:      data.External.ValueBool(),
+		Login:         data.Login.ValueString(),
 		DefaultSchema: data.DefaultSchema.ValueString(),
 	}
 
-	cur, err := client.CreateUser(user)
+	user, err := r.ctx.Client.CreateUser(ctx, create)
 	if err != nil {
 		resp.Diagnostics.AddError("could not create user", err.Error())
 		return
 	}
 
-	data.Id = types.StringValue(cur.Id)
-	tflog.Trace(ctx, fmt.Sprintf("Created user %s in db %s", data.Username, data.DB))
+	userToResource(&data, user)
+	tflog.Trace(ctx, fmt.Sprintf("Created user %s", data.Username))
 
 	// Save data into Terraform state
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
+}
+
+func userToResource(data *MssqlUserResourceModel, user mssql.User) {
+	data.Id = types.StringValue(user.Id)
+	data.Username = types.StringValue(user.Username)
+
+	if user.Sid != "" {
+		data.Sid = types.StringValue(user.Sid)
+	}
+
+	// Deal with https://github.com/hashicorp/terraform-provider-kubernetes/issues/2185
+	// no need to make everything "computed" if we don't have to.
+	if user.Login != "" {
+		data.Login = types.StringValue(user.Login)
+	}
+
+	data.External = types.BoolValue(user.External)
+	data.DefaultSchema = types.StringValue(user.DefaultSchema)
 }
 
 func (r *MssqlUserResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
@@ -141,24 +186,17 @@ func (r *MssqlUserResource) Read(ctx context.Context, req resource.ReadRequest, 
 		return
 	}
 
-	client, err := r.ctx.ClientFactory(ctx, data.DB.ValueString())
+	user, err := r.ctx.Client.GetUser(ctx, data.Id.ValueString())
 
-	if err != nil {
-		resp.Diagnostics.AddError("unable to get database connection", fmt.Sprintf("unable to get database connection to %s, got error: %s", data.DB.ValueString(), err))
-		return
-	}
-
-	user, err := client.GetUser(data.Username.ValueString())
-
-	if err != nil {
+	// If resource is not found, remove it from the state
+	if errors.Is(err, sql.ErrNoRows) {
+		resp.State.RemoveResource(ctx)
+	} else if err != nil {
 		resp.Diagnostics.AddError("Unable", fmt.Sprintf("Unable to read MssqlUser, got error: %s", err))
 		return
 	}
 
-	data.Id = types.StringValue(user.Id)
-	data.DefaultSchema = types.StringValue(user.DefaultSchema)
-
-	// Save updated data into Terraform state
+	userToResource(&data, user)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
@@ -171,20 +209,13 @@ func (r *MssqlUserResource) Update(ctx context.Context, req resource.UpdateReque
 		return
 	}
 
-	client, err := r.ctx.ClientFactory(ctx, data.DB.ValueString())
-
-	if err != nil {
-		resp.Diagnostics.AddError("unable to get database connection", fmt.Sprintf("unable to get database connection to %s, got error: %s", data.DB.ValueString(), err))
-		return
-	}
-
-	user := core.User{
-		Username:      data.Username.ValueString(),
+	user := mssql.UpdateUser{
+		Id:            data.Id.ValueString(),
 		Password:      data.Password.ValueString(),
 		DefaultSchema: data.DefaultSchema.ValueString(),
 	}
 
-	cur, err := client.UpdateUser(user)
+	cur, err := r.ctx.Client.UpdateUser(ctx, user)
 	if err != nil {
 		resp.Diagnostics.AddError("could not update user", err.Error())
 		return
@@ -206,13 +237,7 @@ func (r *MssqlUserResource) Delete(ctx context.Context, req resource.DeleteReque
 		return
 	}
 
-	client, err := r.ctx.ClientFactory(ctx, data.DB.ValueString())
-	if err != nil {
-		resp.Diagnostics.AddError("unable to get database connection", fmt.Sprintf("unable to get database connection to %s, got error: %s", data.DB.ValueString(), err))
-		return
-	}
-
-	err = client.DeleteUser(data.Username.ValueString())
+	err := r.ctx.Client.DeleteUser(ctx, data.Id.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError("unable to delete user", fmt.Sprintf("unable to delete user %s, got error: %s", data.Username.ValueString(), err))
 		return

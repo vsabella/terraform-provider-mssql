@@ -8,6 +8,7 @@ terraform {
 
 provider "mssql" {
   host = "127.0.0.1"
+  database = "example"
   sql_auth = {
     username = "sa"
     password = "Ax@0n9A9REQF4TCgdKP0KrZC"
@@ -15,15 +16,9 @@ provider "mssql" {
 }
 
 resource "mssql_user" "example" {
-  database = "example"
-  username = "example-user"
-  password = "1234"
-}
-
-resource "mssql_user" "example2" {
-  database = "example"
-  username = "example-user"
-  password = "1234"
+  username = "exampleuser"
+  password = "AXoN@123451#@#293923293@@#@#!!@#"
+  default_schema = "dbo"
 }
 
 output "user" {
