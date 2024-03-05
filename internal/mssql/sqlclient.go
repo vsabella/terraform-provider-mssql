@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	_ "github.com/microsoft/go-mssqldb"
+	"net/url"
 	"strings"
 )
 
@@ -212,6 +213,120 @@ func (m client) DeleteUser(ctx context.Context, username string) error {
 		cmd,
 		username,
 		username,
+	)
+
+	return err
+}
+
+func encodeRoleMembershipId(role string, member string) string {
+	return fmt.Sprintf("%s/%s", url.QueryEscape(role), url.QueryEscape(member))
+}
+
+func decodeRoleMembershipId(id string) (string, string, error) {
+	re, me, found := strings.Cut(id, "/")
+	if !found {
+		return "", "", sql.ErrNoRows
+	}
+
+	role, err := url.QueryUnescape(re)
+	if err != nil {
+		return "", "", err
+	}
+
+	member, err := url.QueryUnescape(me)
+	if err != nil {
+		return "", "", err
+	}
+
+	return role, member, err
+}
+
+func (m client) ReadRoleMembership(ctx context.Context, id string) (RoleMembership, error) {
+	var roleMembership RoleMembership
+
+	role, member, err := decodeRoleMembershipId(id)
+	if err != nil {
+		return roleMembership, err
+	}
+
+	cmd := `SELECT r.name role_principal_name,
+m.name AS member_principal_name
+FROM sys.database_role_members rm
+JOIN sys.database_principals r
+ON rm.role_principal_id = r.principal_id
+JOIN sys.database_principals m
+ON rm.member_principal_id = m.principal_id
+WHERE r.type = 'R'
+AND R.name = @p1
+AND M.name = @p2
+`
+	conn, err := m.connect(nil)
+	if err != nil {
+		return roleMembership, err
+	}
+	defer conn.Close()
+
+	tflog.Debug(ctx, fmt.Sprintf("Reading Role Assignment role %s, member %s: cmd: %s", role, member, cmd))
+	result := conn.QueryRowContext(ctx,
+		cmd,
+		role,
+		member,
+	)
+
+	err = result.Scan(&roleMembership.Role, &roleMembership.Member)
+	if err != nil {
+		tflog.Warn(ctx, err.Error())
+		return roleMembership, err
+	}
+
+	roleMembership.Id = encodeRoleMembershipId(roleMembership.Role, roleMembership.Member)
+
+	tflog.Debug(ctx, fmt.Sprintf("SUCCESS Reading Role Assignment role %s, member %s: cmd: %s", role, member, cmd))
+	return roleMembership, err
+}
+
+func (m client) AssignRole(ctx context.Context, role string, member string) (RoleMembership, error) {
+	var roleMembership RoleMembership
+
+	cmd := `DECLARE @sql NVARCHAR(max);
+          SET @sql = 'ALTER ROLE ' + QUOTENAME(@p1) + ' ADD MEMBER ' + QUOTENAME(@p2);
+          EXEC (@sql);`
+
+	conn, err := m.connect(nil)
+	if err != nil {
+		return roleMembership, err
+	}
+	defer conn.Close()
+
+	tflog.Debug(ctx, fmt.Sprintf("Adding Principal %s to role %s: cmd: %s", member, role, cmd))
+	_, err = conn.ExecContext(ctx,
+		cmd,
+		role,
+		member,
+	)
+
+	if err != nil {
+		return roleMembership, err
+	}
+	return m.ReadRoleMembership(ctx, encodeRoleMembershipId(role, member))
+}
+
+func (m client) UnassignRole(ctx context.Context, role string, principal string) error {
+	cmd := `DECLARE @sql NVARCHAR(max);
+          SET @sql = 'ALTER ROLE ' + QUOTENAME(@p1) + ' DROP MEMBER ' + QUOTENAME(@p2);
+          EXEC (@sql);`
+
+	conn, err := m.connect(nil)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	tflog.Debug(ctx, fmt.Sprintf("Removing Principal %s from role %s: cmd: %s", principal, role, cmd))
+	_, err = conn.ExecContext(ctx,
+		cmd,
+		role,
+		principal,
 	)
 
 	return err

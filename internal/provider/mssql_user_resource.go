@@ -145,12 +145,12 @@ func (r *MssqlUserResource) Create(ctx context.Context, req resource.CreateReque
 
 	user, err := r.ctx.Client.CreateUser(ctx, create)
 	if err != nil {
-		resp.Diagnostics.AddError("could not create user", err.Error())
+		resp.Diagnostics.AddError(fmt.Sprintf("Error creating user %s", create.Username), err.Error())
 		return
 	}
 
 	userToResource(&data, user)
-	tflog.Trace(ctx, fmt.Sprintf("Created user %s", data.Username))
+	tflog.Debug(ctx, fmt.Sprintf("Created user %s", data.Username))
 
 	// Save data into Terraform state
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
@@ -188,6 +188,7 @@ func (r *MssqlUserResource) Read(ctx context.Context, req resource.ReadRequest, 
 	// If resource is not found, remove it from the state
 	if errors.Is(err, sql.ErrNoRows) {
 		resp.State.RemoveResource(ctx)
+		return
 	} else if err != nil {
 		resp.Diagnostics.AddError("Unable", fmt.Sprintf("Unable to read MssqlUser, got error: %s", err))
 		return

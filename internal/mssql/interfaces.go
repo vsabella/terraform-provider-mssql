@@ -7,6 +7,9 @@ type SqlClient interface {
 	CreateUser(ctx context.Context, create CreateUser) (User, error)
 	UpdateUser(ctx context.Context, update UpdateUser) (User, error)
 	DeleteUser(ctx context.Context, username string) error
+	ReadRoleMembership(ctx context.Context, id string) (RoleMembership, error)
+	AssignRole(ctx context.Context, role string, principal string) (RoleMembership, error)
+	UnassignRole(ctx context.Context, role string, principal string) error
 }
 
 type User struct {
@@ -17,6 +20,12 @@ type User struct {
 	External      bool
 	Login         string
 	DefaultSchema string
+}
+
+type RoleMembership struct {
+	Id     string
+	Role   string
+	Member string
 }
 
 type CreateUser struct {

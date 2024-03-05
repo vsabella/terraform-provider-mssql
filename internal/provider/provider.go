@@ -128,6 +128,7 @@ func (p *MssqlProvider) Configure(ctx context.Context, req provider.ConfigureReq
 func (p *MssqlProvider) Resources(ctx context.Context) []func() resource.Resource {
 	return []func() resource.Resource{
 		NewMssqlUserResource,
+		NewMssqlRoleAssignmentResource,
 	}
 }
 

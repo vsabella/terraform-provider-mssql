@@ -7,7 +7,7 @@ terraform {
 }
 
 provider "mssql" {
-  host = "127.0.0.1"
+  host     = "127.0.0.1"
   database = "example"
   sql_auth = {
     username = "sa"
@@ -20,7 +20,14 @@ resource "mssql_user" "example" {
   password = "AXzN@123451#@#293923293@@#@#!!@#"
 }
 
+resource "mssql_role_assignment" "example" {
+  for_each = toset(["db_ddladmin", "db_datareader", "db_datawriter"])
+
+  role      = each.key
+  principal = mssql_user.example.username
+}
+
 output "user" {
-  value = mssql_user.example
+  value     = mssql_user.example
   sensitive = true
 }
