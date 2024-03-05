@@ -34,13 +34,6 @@ type SqlAuth struct {
 	Password types.String `tfsdk:"password"`
 }
 
-//
-//type azureAuth struct {
-//	ClientId     types.String `tfsdk:"client_id"`
-//	ClientSecret types.String `tfsdk:"client_secret"`
-//	TenantId     types.String `tfsdk:"tenant_id"`
-//}
-
 type MssqlProviderModel struct {
 	Host     types.String `tfsdk:"host"`
 	Port     types.Int64  `tfsdk:"port"`

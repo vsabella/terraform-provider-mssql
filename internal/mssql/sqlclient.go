@@ -61,7 +61,7 @@ WHERE P.[name] = @username`
 }
 
 func (m client) CreateUser(ctx context.Context, create CreateUser) (User, error) {
-	user := *new(User)
+	var user User
 	cmd, args, err := buildCreateUser(create)
 	if err != nil {
 		return user, err
@@ -142,13 +142,67 @@ func buildCreateUser(create CreateUser) (string, []any, error) {
 	return cmdBuilder.String(), args, nil
 }
 
-func (m client) UpdateUser(ctx context.Context, user UpdateUser) (User, error) {
-	//TODO implement me
-	panic("implement me")
+func addOption(builder *strings.Builder, args *[]any, name string, value string, identifier bool) {
+	if value != "" {
+		if builder.Len() == 0 {
+			builder.WriteString(" + 'WITH '")
+		} else {
+			builder.WriteString(" + ', '")
+		}
+
+		if identifier {
+			builder.WriteString(fmt.Sprintf(" + '%s = ' + QUOTENAME(@%s)", name, strings.ToLower(name)))
+		} else {
+			builder.WriteString(fmt.Sprintf(" + '%s = ' + QUOTENAME(@%s,'''')", name, strings.ToLower(name)))
+		}
+
+		*args = append(*args, sql.Named(strings.ToLower(name), value))
+	}
+}
+
+func (m client) UpdateUser(ctx context.Context, update UpdateUser) (User, error) {
+	var cmdBuilder strings.Builder
+	var optionsBuilder strings.Builder
+	var args []any
+
+	addOption(&optionsBuilder, &args, "PASSWORD", update.Password, false)
+	addOption(&optionsBuilder, &args, "DEFAULT_SCHEMA", update.DefaultSchema, true)
+
+	if optionsBuilder.Len() > 0 {
+
+		cmdBuilder.WriteString("DECLARE @sql NVARCHAR(max);\n")
+		cmdBuilder.WriteString("SET @sql = 'ALTER USER ' + QUOTENAME(@username)")
+		args = append(args, sql.Named("username", update.Id))
+
+		cmdBuilder.WriteString(optionsBuilder.String())
+		cmdBuilder.WriteString(";\n")
+		cmdBuilder.WriteString("EXEC (@sql);")
+
+		conn, err := m.connect(nil)
+		if err != nil {
+			return User{}, err
+		}
+		defer conn.Close()
+
+		cmd := cmdBuilder.String()
+		tflog.Debug(ctx, fmt.Sprintf("Updating User %s: cmd: %s", update.Id, cmd))
+
+		_, err = conn.ExecContext(ctx,
+			cmd,
+			args...,
+		)
+
+		if err != nil {
+			return User{}, err
+		}
+	}
+
+	return m.GetUser(ctx, update.Id)
+
 }
 
 func (m client) DeleteUser(ctx context.Context, username string) error {
-	cmd := `DECLARE @sql nvarchar(max);
+	cmd := `DECLARE @sql NVARCHAR(max);
           SET @sql = 'IF EXISTS (SELECT 1 FROM [sys].[database_principals] WHERE [type] IN (''E'',''S'',''X'') AND [name] = ' + QUOTENAME(@p1, '''') + ') DROP USER ' + QUOTENAME(@p2);
           EXEC (@sql);`
 

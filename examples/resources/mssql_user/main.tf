@@ -17,8 +17,7 @@ provider "mssql" {
 
 resource "mssql_user" "example" {
   username = "exampleuser"
-  password = "AXoN@123451#@#293923293@@#@#!!@#"
-  default_schema = "dbo"
+  password = "AXzN@123451#@#293923293@@#@#!!@#"
 }
 
 output "user" {
