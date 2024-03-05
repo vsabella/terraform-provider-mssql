@@ -8,10 +8,10 @@ terraform {
 
 provider "mssql" {
   host     = "127.0.0.1"
-  database = "example"
+  database = "testdb"
   sql_auth = {
     username = "sa"
-    password = "Ax@0n9A9REQF4TCgdKP0KrZC"
+    password = "Testing@6CD21E2E-7028-4AE0-923E-B11288822489"
   }
 }
 

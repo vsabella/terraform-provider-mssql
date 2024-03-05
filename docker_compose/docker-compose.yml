@@ -1,20 +1,20 @@
-version: '3.7'
+version: '3.8'
+configs:
+  migrations:
+    file: ../
 services:
-  api:
-    image: "hashicorpdemoapp/product-api:v0.0.22"
-    ports:
-      - "19090:9090"
-    volumes:
-      - ./conf.json:/config/config.json
-    environment:
-      CONFIG_FILE: '/config/config.json'
-    depends_on:
-      - db
   db:
-    image: "hashicorpdemoapp/product-api-db:v0.0.22"
-    ports:
-      - "127.0.0.1:15432:5432"
+    # the Microsoft SQL Server 2019 (mssql/server:2019) is match with Microsoft SQL Azure 12.0.2000.8
+    image: mcr.microsoft.com/mssql/server:2019-CU25-ubuntu-20.04
+    platform: linux/amd64
+    pull_policy: missing
     environment:
-      POSTGRES_DB: 'products'
-      POSTGRES_USER: 'postgres'
-      POSTGRES_PASSWORD: 'password'
+      ACCEPT_EULA: "y"
+      SA_PASSWORD: "Testing@6CD21E2E-7028-4AE0-923E-B11288822489"
+    healthcheck:
+      test: /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P ${SA_PASSWORD} -Q 'select 1'
+      interval: 15s
+      start_period: 15s
+      timeout: 10s
+    ports:
+      - "127.0.0.1:1433:1433"

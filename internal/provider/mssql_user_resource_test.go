@@ -5,9 +5,8 @@ package provider
 
 import (
 	"fmt"
-	"testing"
-
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"testing"
 )
 
 func TestAccMssqlUserResource(t *testing.T) {
@@ -17,40 +16,46 @@ func TestAccMssqlUserResource(t *testing.T) {
 		Steps: []resource.TestStep{
 			// Create and Read testing
 			{
-				Config: testAccMssqlUserResourceConfig("one"),
+				Config: providerConfig + testAccMssqlUserResourceConfig(),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("scaffolding_MssqlUser.test", "configurable_attribute", "one"),
-					resource.TestCheckResourceAttr("scaffolding_MssqlUser.test", "defaulted", "MssqlUser value when not configured"),
-					resource.TestCheckResourceAttr("scaffolding_MssqlUser.test", "id", "MssqlUser-id"),
+					resource.TestCheckResourceAttr("mssql_user.test", "username", "testusername"),
+					resource.TestCheckResourceAttr("mssql_user.test", "password", "testpassword-meet-requirements1234@@@"),
+					resource.TestCheckResourceAttr("mssql_user.test", "external", "false"),
+					resource.TestCheckResourceAttr("mssql_user.test", "default_schema", "dbo"),
 				),
 			},
 			// ImportState testing
-			{
-				ResourceName:      "scaffolding_MssqlUser.test",
-				ImportState:       true,
-				ImportStateVerify: true,
-				// This is not normally necessary, but is here because this
-				// MssqlUser code does not have an actual upstream service.
-				// Once the Read method is able to refresh information from
-				// the upstream service, this can be removed.
-				ImportStateVerifyIgnore: []string{"configurable_attribute", "defaulted"},
-			},
-			// Update and Read testing
-			{
-				Config: testAccMssqlUserResourceConfig("two"),
-				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("scaffolding_MssqlUser.test", "configurable_attribute", "two"),
-				),
-			},
+			//{
+			//	Config:            providerConfig,
+			//	ResourceName:      "mssql_MssqlUser.test",
+			//	ImportState:       true,
+			//	ImportStateVerify: true,
+			//	// This is not normally necessary, but is here because this
+			//	// MssqlUser code does not have an actual upstream service.
+			//	// Once the Read method is able to refresh information from
+			//	// the upstream service, this can be removed.
+			//	ImportStateVerifyIgnore: []string{"configurable_attribute", "defaulted"},
+			//},
+			//// Update and Read testing
+			//{
+			//	Config: providerConfig + testAccMssqlUserResourceConfig(),
+			//	Check: resource.ComposeAggregateTestCheckFunc(
+			//		resource.TestCheckResourceAttr("mssql_MssqlUser.test", "username", "testusername"),
+			//		resource.TestCheckResourceAttr("mssql_MssqlUser.test", "password", "testpassword"),
+			//		resource.TestCheckResourceAttr("mssql_MssqlUser.test", "external", "false"),
+			//		resource.TestCheckResourceAttr("mssql_MssqlUser.test", "default_schema", "dbo"),
+			//	),
+			//},
 			// Delete testing automatically occurs in TestCase
 		},
 	})
 }
 
-func testAccMssqlUserResourceConfig(configurableAttribute string) string {
+func testAccMssqlUserResourceConfig() string {
 	return fmt.Sprintf(`
-resource "scaffolding_MssqlUser" "test" {
-  configurable_attribute = %[1]q
+resource "mssql_user" "test" {
+  username = "testusername"
+  password = "testpassword-meet-requirements1234@@@"
 }
-`, configurableAttribute)
+`)
 }

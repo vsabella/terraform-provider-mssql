@@ -59,6 +59,21 @@ In order to run the full suite of Acceptance tests, run `make testacc`.
 
 *Note:* Acceptance tests create real resources, and often cost money to run.
 
+Note: You have to create the Example Database (autocreating the database is not wired in to docker-compose yet)
+```sql
+EXEC sp_configure 'CONTAINED DATABASE AUTHENTICATION', 1;
+GO
+RECONFIGURE
+GO
+
+CREATE DATABASE [testdb] CONTAINMENT = PARTIAL;
+GO
+```
+
+Afterwards
 ```shell
+pushd docker-compose
+docker compose up -d
+popd
 make testacc
 ```
