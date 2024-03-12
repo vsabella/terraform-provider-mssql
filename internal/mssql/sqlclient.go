@@ -331,3 +331,65 @@ func (m client) UnassignRole(ctx context.Context, role string, principal string)
 
 	return err
 }
+
+func ReadDatabasePermission(ctx context.Context, id string) (DatabasePermission, error) {
+	var DatabasePermission DatabasePermission
+	principle_id, permission_name := strings.Split(id, "/")[0], strings.Split(id, "/")[1]
+
+	conn, err := m.connect(nil)
+	if err != nil {
+		return DatabasePermission, err
+	}
+	defer conn.Close()
+
+	cmd := fmt.Sprintf("SELECT [grantee_principal_id], [permission_name] FROM sys.database_permissions WHERE [class] = 0 AND [state] IN ('G', 'W') AND [grantee_principal_id] = %s AND [permission_name] = %s", principle_id, permission_name)
+
+	tflog.Debug(ctx, fmt.Sprintf("Reading DB permission principle_id: %s, permission: %s", principle_id, permission_name))
+	result := conn.QueryRowContext(ctx, cmd)
+
+	err = result.Scan(&DatabasePermission.Principal, &DatabasePermission.Permission)
+	if err != nil {
+		tflog.Warn(ctx, err.Error())
+		return DatabasePermission, err
+	}
+
+	DatabasePermission.id = fmt.Sprintf("%s/%s", DatabasePermission.Principal, DatabasePermission.Permission)
+	tflog.Debug(ctx, fmt.Sprintf("SUCCESS Reading DB permission principle_id: %s, permission: %s", principle_id, permission_name))
+
+	return DatabasePermission, err
+}
+
+func GrantDatabasePermission(ctx context.Context, principal_id string, permission_name string) (DatabasePermission, error) {
+	var DatabasePermission DatabasePermission
+
+	conn, err := m.connect(nil)
+	if err != nil {
+		return DatabasePermission, err
+	}
+	defer conn.Close()
+
+	cmd := fmt.Sprintf("GRANT %s TO [%s]", permission_name, principal_id)
+
+	tflog.Debug(ctx, fmt.Sprintf("Granting permission %s to %s", permission_name, principal_id))
+	_, err = conn.ExecContext(ctx, cmd,)
+
+	if err != nil {
+		return DatabasePermission, err
+	}
+	return m.ReadDatabasePermission(ctx, fmt.Sprintf("%s/%s", principal_id, permission_name))
+}
+
+func RevokeDatabasePermission(ctx context.Context, principal_id string, permission_name string) error {
+	conn, err := m.connect(nil)
+	if err != nil {
+		return DatabasePermission, err
+	}
+	defer conn.Close()
+
+	cmd := fmt.Sprintf("REVOKE %s TO [%s] CASCADE", permission_name, principal_id)
+
+	tflog.Debug(ctx, fmt.Sprintf("Revoking permission %s from user %s", permission_name, principal_id))
+	_, err = conn.ExecContext(ctx,cmd,)
+
+	return err
+}

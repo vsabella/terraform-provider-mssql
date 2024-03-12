@@ -10,6 +10,9 @@ type SqlClient interface {
 	ReadRoleMembership(ctx context.Context, id string) (RoleMembership, error)
 	AssignRole(ctx context.Context, role string, principal string) (RoleMembership, error)
 	UnassignRole(ctx context.Context, role string, principal string) error
+	ReadPermission(ctx context.Context, id string) (DatabasePermission, error)
+	GrantPermission(ctx context.Context, principal string, permission string) (DatabasePermission, error)
+	RevokePermission(ctx context.Context, principal string, permission string) error
 }
 
 type User struct {
@@ -42,4 +45,10 @@ type UpdateUser struct {
 	Password      string
 	Login         string
 	DefaultSchema string
+}
+
+type DatabasePermission struct {
+	Id          string
+	Principal	string
+	Permission	string
 }
