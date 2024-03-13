@@ -332,7 +332,7 @@ func (m client) UnassignRole(ctx context.Context, role string, principal string)
 	return err
 }
 
-func ReadDatabasePermission(ctx context.Context, id string) (DatabasePermission, error) {
+func (m client) ReadDatabasePermission(ctx context.Context, id string) (DatabasePermission, error) {
 	var DatabasePermission DatabasePermission
 	principle_id, permission_name := strings.Split(id, "/")[0], strings.Split(id, "/")[1]
 
@@ -353,13 +353,13 @@ func ReadDatabasePermission(ctx context.Context, id string) (DatabasePermission,
 		return DatabasePermission, err
 	}
 
-	DatabasePermission.id = fmt.Sprintf("%s/%s", DatabasePermission.Principal, DatabasePermission.Permission)
+	DatabasePermission.Id = fmt.Sprintf("%s/%s", DatabasePermission.Principal, DatabasePermission.Permission)
 	tflog.Debug(ctx, fmt.Sprintf("SUCCESS Reading DB permission principle_id: %s, permission: %s", principle_id, permission_name))
 
 	return DatabasePermission, err
 }
 
-func GrantDatabasePermission(ctx context.Context, principal_id string, permission_name string) (DatabasePermission, error) {
+func (m client) GrantDatabasePermission(ctx context.Context, principal_id string, permission_name string) (DatabasePermission, error) {
 	var DatabasePermission DatabasePermission
 
 	conn, err := m.connect(nil)
@@ -379,10 +379,10 @@ func GrantDatabasePermission(ctx context.Context, principal_id string, permissio
 	return m.ReadDatabasePermission(ctx, fmt.Sprintf("%s/%s", principal_id, permission_name))
 }
 
-func RevokeDatabasePermission(ctx context.Context, principal_id string, permission_name string) error {
+func (m client) RevokeDatabasePermission(ctx context.Context, principal_id string, permission_name string) error {
 	conn, err := m.connect(nil)
 	if err != nil {
-		return DatabasePermission, err
+		return err
 	}
 	defer conn.Close()
 
