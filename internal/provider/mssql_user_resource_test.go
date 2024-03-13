@@ -4,9 +4,9 @@
 package provider
 
 import (
-	"fmt"
-	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"testing"
+
+	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 )
 
 func TestAccMssqlUserResource(t *testing.T) {
@@ -52,10 +52,10 @@ func TestAccMssqlUserResource(t *testing.T) {
 }
 
 func testAccMssqlUserResourceConfig() string {
-	return fmt.Sprintf(`
+	return `
 resource "mssql_user" "test" {
   username = "testusername"
   password = "testpassword-meet-requirements1234@@@"
 }
-`)
+`
 }

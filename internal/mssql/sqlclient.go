@@ -3,7 +3,6 @@ package mssql
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -85,23 +84,23 @@ func buildCreateUser(create CreateUser) (string, []any, error) {
 	var args []any
 
 	if create.Login != "" && create.Password != "" {
-		return "", nil, errors.New(fmt.Sprintf("invalid user %s, login users may not have passwords", create.Username))
+		return "", nil, fmt.Errorf("invalid user %s, login users may not have passwords", create.Username)
 	}
 
 	if create.External && create.Password != "" {
-		return "", nil, errors.New(fmt.Sprintf("invalid user %s, external users may not have passwords", create.Username))
+		return "", nil, fmt.Errorf("invalid user %s, external users may not have passwords", create.Username)
 	}
 
 	if create.External && create.Login != "" {
-		return "", nil, errors.New(fmt.Sprintf("invalid user %s, external users must not have a login", create.Username))
+		return "", nil, fmt.Errorf("invalid user %s, external users must not have a login", create.Username)
 	}
 
 	if create.External && create.Sid != "" {
-		return "", nil, errors.New(fmt.Sprintf("invalid user %s, external users must not have a SID", create.Username))
+		return "", nil, fmt.Errorf("invalid user %s, external users must not have a SID", create.Username)
 	}
 
 	if create.DefaultSchema == "" {
-		return "", nil, errors.New(fmt.Sprintf("invalid user %s, default schema must be specified", create.Username))
+		return "", nil, fmt.Errorf("invalid user %s, default schema must be specified", create.Username)
 	}
 
 	cmdBuilder.WriteString("DECLARE @sql NVARCHAR(max);\n")
