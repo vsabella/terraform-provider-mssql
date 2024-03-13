@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -36,7 +37,6 @@ type MssqlUserResourceModel struct {
 	Username      types.String `tfsdk:"username"`
 	Password      types.String `tfsdk:"password"`
 	External      types.Bool   `tfsdk:"external"`
-	Login         types.String `tfsdk:"login"`
 	Sid           types.String `tfsdk:"sid"`
 	DefaultSchema types.String `tfsdk:"default_schema"`
 }
@@ -67,7 +67,7 @@ func (r *MssqlUserResource) Schema(ctx context.Context, req resource.SchemaReque
 			"password": schema.StringAttribute{
 				Required:  true,
 				Sensitive: true,
-				MarkdownDescription: "Password for the login. Must follow strong password policies defined for SQL server. " +
+				MarkdownDescription: "Password for the user account. Must follow strong password policies defined for SQL server. " +
 					"Passwords are case-sensitive, length must be 8-128 chars, can include all characters except `'` or `name`.\n\n" +
 					"~> **Note** Password will be stored in the raw state as plain-text. [Read more about sensitive data in state](https://www.terraform.io/language/state/sensitive-data).",
 				PlanModifiers: []planmodifier.String{
@@ -82,10 +82,6 @@ func (r *MssqlUserResource) Schema(ctx context.Context, req resource.SchemaReque
 				PlanModifiers: []planmodifier.Bool{
 					boolplanmodifier.RequiresReplace(),
 				},
-			},
-			"login": schema.StringAttribute{
-				MarkdownDescription: "Login to associate to this user",
-				Optional:            true,
 			},
 			"sid": schema.StringAttribute{
 				MarkdownDescription: "Set custom SID for the user",
@@ -139,7 +135,6 @@ func (r *MssqlUserResource) Create(ctx context.Context, req resource.CreateReque
 		Password:      data.Password.ValueString(),
 		Sid:           data.Sid.ValueString(),
 		External:      data.External.ValueBool(),
-		Login:         data.Login.ValueString(),
 		DefaultSchema: data.DefaultSchema.ValueString(),
 	}
 
@@ -162,12 +157,6 @@ func userToResource(data *MssqlUserResourceModel, user mssql.User) {
 
 	if user.Sid != "" {
 		data.Sid = types.StringValue(user.Sid)
-	}
-
-	// Deal with https://github.com/hashicorp/terraform-provider-kubernetes/issues/2185
-	// no need to make everything "computed" if we don't have to.
-	if user.Login != "" {
-		data.Login = types.StringValue(user.Login)
 	}
 
 	data.External = types.BoolValue(user.External)
@@ -210,7 +199,6 @@ func (r *MssqlUserResource) Update(ctx context.Context, req resource.UpdateReque
 	user := mssql.UpdateUser{
 		Id:            data.Id.ValueString(),
 		Password:      data.Password.ValueString(),
-		Login:         data.Login.ValueString(),
 		DefaultSchema: data.DefaultSchema.ValueString(),
 	}
 
