@@ -45,16 +45,14 @@ func (m client) GetUser(ctx context.Context, username string) (User, error) {
     P.[name] AS name,
     P.[type] AS type,
     CASE WHEN P.[type] IN ('E', 'X') THEN 1 ELSE 0 END AS ext,
-    COALESCE(L.[name], '') AS login,
     COALESCE(P.[default_schema_name], '') AS default_schema_name
 FROM sys.database_principals P
-LEFT JOIN sys.sql_logins L ON P.sid = L.sid
 WHERE P.[name] = @username`
 
 	tflog.Debug(ctx, fmt.Sprintf("Executing refresh query for username %s: command %s", username, cmd))
 	result := m.conn.QueryRowContext(ctx, cmd, sql.Named("username", username))
 
-	err := result.Scan(&user.Id, &user.Sid, &user.Username, &user.Type, &user.External, &user.Login, &user.DefaultSchema)
+	err := result.Scan(&user.Id, &user.Sid, &user.Username, &user.Type, &user.External, &user.DefaultSchema)
 	return user, err
 }
 
@@ -83,16 +81,8 @@ func buildCreateUser(create CreateUser) (string, []any, error) {
 
 	var args []any
 
-	if create.Login != "" && create.Password != "" {
-		return "", nil, fmt.Errorf("invalid user %s, login users may not have passwords", create.Username)
-	}
-
 	if create.External && create.Password != "" {
 		return "", nil, fmt.Errorf("invalid user %s, external users may not have passwords", create.Username)
-	}
-
-	if create.External && create.Login != "" {
-		return "", nil, fmt.Errorf("invalid user %s, external users must not have a login", create.Username)
 	}
 
 	if create.External && create.Sid != "" {
@@ -110,11 +100,6 @@ func buildCreateUser(create CreateUser) (string, []any, error) {
 	// Non Options
 	if create.External {
 		cmdBuilder.WriteString(" + ' FROM EXTERNAL PROVIDER'")
-	}
-
-	if create.Login != "" {
-		cmdBuilder.WriteString(" + ' FROM LOGIN ' + QUOTENAME(@login)")
-		args = append(args, sql.Named("login", create.Login))
 	}
 
 	// Begin Options. Easy since we make DefaultSchema required
@@ -153,7 +138,6 @@ func (m client) UpdateUser(ctx context.Context, update UpdateUser) (User, error)
 
 	addOption(&optionsBuilder, &args, "PASSWORD", update.Password, false)
 	addOption(&optionsBuilder, &args, "DEFAULT_SCHEMA", update.DefaultSchema, true)
-	addOption(&optionsBuilder, &args, "LOGIN", update.Login, true)
 
 	if optionsBuilder.Len() > 0 {
 
