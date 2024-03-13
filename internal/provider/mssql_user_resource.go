@@ -16,8 +16,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
-	"github.com/openaxon/terraform-provider-mssql/internal/core"
-	"github.com/openaxon/terraform-provider-mssql/internal/mssql"
+	"github.com/vsabella/terraform-provider-mssql/internal/core"
+	"github.com/vsabella/terraform-provider-mssql/internal/mssql"
 )
 
 // Ensure provider defined types fully satisfy framework interfaces.

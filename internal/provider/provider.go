@@ -13,8 +13,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	"github.com/openaxon/terraform-provider-mssql/internal/core"
-	"github.com/openaxon/terraform-provider-mssql/internal/mssql"
+	"github.com/vsabella/terraform-provider-mssql/internal/core"
+	"github.com/vsabella/terraform-provider-mssql/internal/mssql"
 )
 
 // Ensure MssqlProvider satisfies various provider interfaces.

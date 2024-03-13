@@ -1,4 +1,4 @@
-module github.com/openaxon/terraform-provider-mssql
+module github.com/vsabella/terraform-provider-mssql
 
 go 1.21
 

@@ -1,6 +1,6 @@
 package core
 
-import "github.com/openaxon/terraform-provider-mssql/internal/mssql"
+import "github.com/vsabella/terraform-provider-mssql/internal/mssql"
 
 type ProviderData struct {
 	Client mssql.SqlClient
