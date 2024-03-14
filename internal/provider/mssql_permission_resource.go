@@ -29,7 +29,7 @@ type MssqlPermissionResource struct {
 
 type MssqlPermissionResourceModel struct {
 	Id              types.String `tfsdk:"id"`
-	Principal		types.String `tfsdk:"principal_id"`
+	Principal		types.String `tfsdk:"principal"`
 	Permission      types.String `tfsdk:"permission"`
 }
 
@@ -44,25 +44,25 @@ func (r *MssqlPermissionResource) Schema(ctx context.Context, req resource.Schem
 
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
-				MarkdownDescription: "`<principal_id>/<permission>`.",
+				MarkdownDescription: "`<principal>/<permission>`.",
 				Computed:            true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
 
 			},
-			"principal_id": schema.StringAttribute{
-				MarkdownDescription: "`<principal_id>`.",
+			"principal": schema.StringAttribute{
+				MarkdownDescription: "`<principal>`.",
 				Required:            true,
 				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
+					stringplanmodifier.RequiresReplace(),
 				},
 			},
-			"permissions": schema.StringAttribute{
+			"permission": schema.StringAttribute{
 				MarkdownDescription: "Name of database-level SQL permission. For full list of supported permissions, see [docs](https://learn.microsoft.com/en-us/sql/t-sql/statements/grant-database-permissions-transact-sql?view=azuresqldb-current#remarks)",
-				Computed:            true,
+				Required:            true,
 				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
+					stringplanmodifier.RequiresReplace(),
 				},
 			},
 		},

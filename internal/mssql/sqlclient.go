@@ -334,32 +334,46 @@ func (m client) UnassignRole(ctx context.Context, role string, principal string)
 
 func (m client) ReadDatabasePermission(ctx context.Context, id string) (DatabasePermission, error) {
 	var DatabasePermission DatabasePermission
-	principle_id, permission_name := strings.Split(id, "/")[0], strings.Split(id, "/")[1]
+	principal := strings.Split(id, "/")[0]
+	permission := strings.Split(id, "/")[1]
 
 	conn, err := m.connect(nil)
 	if err != nil {
-		return DatabasePermission, err
+		return DatabasePermission, fmt.Errorf("failed to connect to the database: %v", err)
 	}
 	defer conn.Close()
 
-	cmd := fmt.Sprintf("SELECT [grantee_principal_id], [permission_name] FROM sys.database_permissions WHERE [class] = 0 AND [state] IN ('G', 'W') AND [grantee_principal_id] = %s AND [permission_name] = %s", principle_id, permission_name)
+	cmd := `
+		SELECT
+			dp.[name] AS [principal],
+			sdp.[permission_name] AS [permission]
+		FROM
+			sys.database_permissions AS sdp
+		JOIN
+			sys.database_principals AS dp ON sdp.grantee_principal_id = dp.principal_id
+		WHERE
+			sdp.[class] = 0
+			AND sdp.[state] IN ('G', 'W')
+			AND dp.[name] = @p1
+			AND sdp.[permission_name] = @p2;
+	`
 
-	tflog.Debug(ctx, fmt.Sprintf("Reading DB permission principle_id: %s, permission: %s", principle_id, permission_name))
-	result := conn.QueryRowContext(ctx, cmd)
+	tflog.Debug(ctx, fmt.Sprintf("Reading DB permission [principal: %s, permission: %s]", principal, permission))
+	result := conn.QueryRowContext(ctx, cmd, principal, permission)
 
 	err = result.Scan(&DatabasePermission.Principal, &DatabasePermission.Permission)
 	if err != nil {
-		tflog.Warn(ctx, err.Error())
+		tflog.Warn(ctx, fmt.Sprintf("failed to scan result: %v", err))
 		return DatabasePermission, err
 	}
 
-	DatabasePermission.Id = fmt.Sprintf("%s/%s", DatabasePermission.Principal, DatabasePermission.Permission)
-	tflog.Debug(ctx, fmt.Sprintf("SUCCESS Reading DB permission principle_id: %s, permission: %s", principle_id, permission_name))
+	DatabasePermission.Id = fmt.Sprintf("%s/%s", DatabasePermission.Principal, strings.ToLower(DatabasePermission.Permission))
+	tflog.Debug(ctx, fmt.Sprintf("SUCCESS Reading DB permission principal: %s, permission: %s", principal, permission))
 
-	return DatabasePermission, err
+	return DatabasePermission, nil
 }
 
-func (m client) GrantDatabasePermission(ctx context.Context, principal_id string, permission_name string) (DatabasePermission, error) {
+func (m client) GrantDatabasePermission(ctx context.Context, principal string, permission string) (DatabasePermission, error) {
 	var DatabasePermission DatabasePermission
 
 	conn, err := m.connect(nil)
@@ -368,28 +382,33 @@ func (m client) GrantDatabasePermission(ctx context.Context, principal_id string
 	}
 	defer conn.Close()
 
-	cmd := fmt.Sprintf("GRANT %s TO [%s]", permission_name, principal_id)
+	query := fmt.Sprintf("GRANT %s TO %s", permission, principal)
 
-	tflog.Debug(ctx, fmt.Sprintf("Granting permission %s to %s", permission_name, principal_id))
-	_, err = conn.ExecContext(ctx, cmd,)
+	tflog.Debug(ctx, fmt.Sprintf("Granting permission %s to %s [%s]", permission, principal, query))
 
+	_, err = conn.ExecContext(ctx, query)
 	if err != nil {
-		return DatabasePermission, err
+		return DatabasePermission, fmt.Errorf("failed to execute grant query: %v", err)
 	}
-	return m.ReadDatabasePermission(ctx, fmt.Sprintf("%s/%s", principal_id, permission_name))
+
+	return m.ReadDatabasePermission(ctx, fmt.Sprintf("%s/%s", principal, strings.ToUpper(permission)))
 }
 
-func (m client) RevokeDatabasePermission(ctx context.Context, principal_id string, permission_name string) error {
+func (m client) RevokeDatabasePermission(ctx context.Context, principal string, permission string) error {
 	conn, err := m.connect(nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to connect to the database: %v", err)
 	}
 	defer conn.Close()
 
-	cmd := fmt.Sprintf("REVOKE %s TO [%s] CASCADE", permission_name, principal_id)
+	query := fmt.Sprintf("REVOKE %s TO %s CASCADE", permission, principal)
 
-	tflog.Debug(ctx, fmt.Sprintf("Revoking permission %s from user %s", permission_name, principal_id))
-	_, err = conn.ExecContext(ctx,cmd,)
+	tflog.Debug(ctx, fmt.Sprintf("Revoking permission %s from user %s", permission, principal))
 
-	return err
+	_, err = conn.ExecContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("failed to execute revoke query: %v", err)
+	}
+
+	return nil
 }
