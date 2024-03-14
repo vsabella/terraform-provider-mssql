@@ -129,6 +129,7 @@ func (p *MssqlProvider) Resources(ctx context.Context) []func() resource.Resourc
 	return []func() resource.Resource{
 		NewMssqlUserResource,
 		NewMssqlRoleAssignmentResource,
+		NewMssqlPermissionResource,
 	}
 }
 
