@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -138,13 +139,20 @@ func (r *MssqlRoleAssignmentResource) Read(ctx context.Context, req resource.Rea
 func (r *MssqlRoleAssignmentResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var data MssqlRoleAssignmentResourceModel
 
-	// There is no update - all changes require replacement
-
 	// Read Terraform plan data into the model
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
+
+	cur, err := r.ctx.Client.ReadRoleMembership(ctx, data.Id.ValueString())
+
+	if err != nil {
+		resp.Diagnostics.AddError("Unable", fmt.Sprintf("Unable to read MssqlUser, got error: %s", err))
+		return
+	}
+
+	data.Id = types.StringValue(core.NormalizeValue(data.Id.String(), cur.Id))
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
