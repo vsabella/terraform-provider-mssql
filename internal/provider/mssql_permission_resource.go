@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -28,9 +29,9 @@ type MssqlPermissionResource struct {
 }
 
 type MssqlPermissionResourceModel struct {
-	Id              types.String `tfsdk:"id"`
-	Principal		types.String `tfsdk:"principal"`
-	Permission      types.String `tfsdk:"permission"`
+	Id         types.String `tfsdk:"id"`
+	Principal  types.String `tfsdk:"principal"`
+	Permission types.String `tfsdk:"permission"`
 }
 
 func (r *MssqlPermissionResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -49,7 +50,6 @@ func (r *MssqlPermissionResource) Schema(ctx context.Context, req resource.Schem
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
-
 			},
 			"principal": schema.StringAttribute{
 				MarkdownDescription: "`<principal>`.",
@@ -140,14 +140,14 @@ func (r *MssqlPermissionResource) Create(ctx context.Context, req resource.Creat
 
 func (r *MssqlPermissionResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var data MssqlPermissionResourceModel
-	// There is no update - all changes require replacement
 
 	// Read Terraform plan data into the model
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
-
+	// Normalize `data` here
+	// ...
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 

@@ -21,7 +21,6 @@ type User struct {
 	Type          string
 	Sid           string
 	External      bool
-	Login         string
 	DefaultSchema string
 }
 
@@ -36,14 +35,12 @@ type CreateUser struct {
 	Password      string
 	Sid           string
 	External      bool
-	Login         string
 	DefaultSchema string
 }
 
 type UpdateUser struct {
 	Id            string
 	Password      string
-	Login         string
 	DefaultSchema string
 }
 

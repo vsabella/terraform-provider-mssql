@@ -17,7 +17,7 @@ MssqlUser resource
 
 ### Required
 
-- `password` (String, Sensitive) Password for the login. Must follow strong password policies defined for SQL server. Passwords are case-sensitive, length must be 8-128 chars, can include all characters except `'` or `name`.
+- `password` (String, Sensitive) Password for the user account. Must follow strong password policies defined for SQL server. Passwords are case-sensitive, length must be 8-128 chars, can include all characters except `'` or `name`.
 
 ~> **Note** Password will be stored in the raw state as plain-text. [Read more about sensitive data in state](https://www.terraform.io/language/state/sensitive-data).
 - `username` (String) MssqlUser configurable attribute with default value
@@ -26,7 +26,6 @@ MssqlUser resource
 
 - `default_schema` (String)
 - `external` (Boolean) Is this an external user (like Microsoft EntraID)
-- `login` (String) Login to associate to this user
 - `sid` (String) Set custom SID for the user
 
 ### Read-Only
