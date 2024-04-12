@@ -46,7 +46,7 @@ func (r *MssqlRoleResource) Schema(ctx context.Context, req resource.SchemaReque
 
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
-				Computed: true,
+				Required: true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},

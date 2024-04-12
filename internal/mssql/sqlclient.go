@@ -225,6 +225,7 @@ AND M.name = @p2
 `
 
 	tflog.Debug(ctx, fmt.Sprintf("Reading Role Assignment role %s, member %s: cmd: %s", role, member, cmd))
+
 	result := m.conn.QueryRowContext(ctx,
 		cmd,
 		role,
@@ -283,13 +284,10 @@ func (m client) GetRole(ctx context.Context, name string) (Role, error) {
 		Id: name,
 	}
 
-	cmd := `SELECT
-    [name] as id,
-FROM sysusers
-WHERE issqlrole = 1 AND name = @name`
+	query := fmt.Sprintf("SELECT [name] FROM sysusers WHERE issqlrole = 1 AND [name] = '%s'", name)
 
-	tflog.Debug(ctx, fmt.Sprintf("Executing refresh query for database %s", name))
-	result := m.conn.QueryRowContext(ctx, cmd, sql.Named("name", name))
+	tflog.Debug(ctx, fmt.Sprintf("Executing refresh query for role %s", name))
+	result := m.conn.QueryRowContext(ctx, query)
 
 	err := result.Scan(&role.Id)
 	return role, err
@@ -297,31 +295,24 @@ WHERE issqlrole = 1 AND name = @name`
 
 func (m client) CreateRole(ctx context.Context, name string) (Role, error) {
 	var role Role
+	query := fmt.Sprintf("CREATE ROLE %s", role.Id)
+	_, err := m.conn.ExecContext(ctx, query)
 
-	cmd := `CREATE ROLE @name 
-  `
-
-	_ = m.conn.QueryRowContext(ctx, cmd, sql.Named("name", name))
-
-	role, err := m.GetRole(ctx, name)
+	role, err = m.GetRole(ctx, name)
 	return role, err
 }
 
-func (m client) UpdateRole(ctx context.Context, role Role) (Role, error) {
+func (m client) UpdateRole(ctx context.Context, name string, updateName string) (Role, error) {
 	var update Role
-	// TODO
+	// TODO update role.name to update
 	update = role
 	return m.GetRole(ctx, update.Id)
 }
 
 func (m client) DeleteRole(ctx context.Context, name string) error {
-	cmd := `DROP ROLE @name`
-
-	tflog.Debug(ctx, fmt.Sprintf("Deleting Role %s: cmd: %s", name, cmd))
-	_, err := m.conn.ExecContext(ctx,
-		cmd,
-		name,
-	)
+	query := fmt.Sprintf("DROP ROLE %s", name)
+	tflog.Debug(ctx, fmt.Sprintf("Deleting Role %s: cmd: %s", name, query))
+	_, err := m.conn.ExecContext(ctx, query)
 
 	return err
 }
