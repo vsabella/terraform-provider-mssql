@@ -49,12 +49,12 @@ type UpdateUser struct {
 }
 
 type DatabasePermission struct {
-	Id          string
-	Principal	string
-	Permission	string
+	Id         string
+	Principal  string
+	Permission string
 }
 
 type Role struct {
-	Id string
-  Grants []string
+	Id     string
+	Grants []string
 }
