@@ -1,8 +1,8 @@
 package provider
 
 import (
-  "fmt"
-  "context"
+	"context"
+	"fmt"
 
 	"database/sql"
 	"errors"
@@ -17,12 +17,11 @@ import (
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	"github.com/vsabella/terraform-provider-mssql/internal/core"
 	"github.com/vsabella/terraform-provider-mssql/internal/mssql"
-
 )
+
 // Ensure provider defined types fully satisfy framework interfaces.
 var _ resource.Resource = &MssqlRoleResource{}
 var _ resource.ResourceWithImportState = &MssqlRoleResource{}
-
 
 func NewMssqlRoleResource() resource.Resource {
 	return &MssqlRoleResource{}
@@ -33,7 +32,7 @@ type MssqlRoleResource struct {
 }
 
 type MssqlRoleResourceModel struct {
-	Id        types.String `tfsdk:"id"`
+	Id types.String `tfsdk:"id"`
 }
 
 func (r *MssqlRoleResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -85,9 +84,9 @@ func (r *MssqlRoleResource) Create(ctx context.Context, req resource.CreateReque
 		return
 	}
 
-  role, err := r.ctx.Client.CreateRole(ctx, data.Id.ValueString())
+	role, err := r.ctx.Client.CreateRole(ctx, data.Id.ValueString())
 	if err != nil {
-		resp.Diagnostics.AddError(fmt.Sprintf("Error creating role %s", data.Id.ValueString()), err.Error())    
+		resp.Diagnostics.AddError(fmt.Sprintf("Error creating role %s", data.Id.ValueString()), err.Error())
 		return
 	}
 
@@ -108,7 +107,7 @@ func (r *MssqlRoleResource) Update(ctx context.Context, req resource.UpdateReque
 	}
 
 	role := mssql.Role{
-		Id:            data.Id.ValueString(),
+		Id: data.Id.ValueString(),
 	}
 
 	cur, err := r.ctx.Client.UpdateRole(ctx, role)
@@ -123,7 +122,6 @@ func (r *MssqlRoleResource) Update(ctx context.Context, req resource.UpdateReque
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
-
 func (r *MssqlRoleResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
 	var data MssqlRoleResourceModel
 
@@ -133,7 +131,7 @@ func (r *MssqlRoleResource) Read(ctx context.Context, req resource.ReadRequest, 
 		return
 	}
 
-  role, err := r.ctx.Client.GetRole(ctx, data.Id.ValueString())
+	role, err := r.ctx.Client.GetRole(ctx, data.Id.ValueString())
 
 	// If resource is not found, remove it from the state
 	if errors.Is(err, sql.ErrNoRows) {
@@ -144,11 +142,9 @@ func (r *MssqlRoleResource) Read(ctx context.Context, req resource.ReadRequest, 
 		return
 	}
 
-  data.Id = types.StringValue(role.Id)
+	data.Id = types.StringValue(role.Id)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
-
-
 
 func (r *MssqlRoleResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
 	var data MssqlRoleResourceModel

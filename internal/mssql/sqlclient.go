@@ -279,11 +279,11 @@ func (m client) UnassignRole(ctx context.Context, role string, principal string)
 }
 
 func (m client) GetRole(ctx context.Context, name string) (Role, error) {
-  role := Role{
-    Id: name,
-  }
+	role := Role{
+		Id: name,
+	}
 
-  cmd := `SELECT
+	cmd := `SELECT
     [name] as id,
 FROM sysusers
 WHERE issqlrole = 1 AND name = @name`
@@ -296,24 +296,23 @@ WHERE issqlrole = 1 AND name = @name`
 }
 
 func (m client) CreateRole(ctx context.Context, name string) (Role, error) {
-  var role Role
+	var role Role
 
-  cmd := `CREATE ROLE @name 
+	cmd := `CREATE ROLE @name 
   `
-  
-  _ = m.conn.QueryRowContext(ctx, cmd, sql.Named("name", name))
 
-  role, err := m.GetRole(ctx, name)
+	_ = m.conn.QueryRowContext(ctx, cmd, sql.Named("name", name))
+
+	role, err := m.GetRole(ctx, name)
 	return role, err
 }
 
 func (m client) UpdateRole(ctx context.Context, role Role) (Role, error) {
-  var update Role
-  // TODO
-  update = role	
-  return m.GetRole(ctx, update.Id)
+	var update Role
+	// TODO
+	update = role
+	return m.GetRole(ctx, update.Id)
 }
-
 
 func (m client) DeleteRole(ctx context.Context, name string) error {
 	cmd := `DROP ROLE @name`
@@ -326,4 +325,3 @@ func (m client) DeleteRole(ctx context.Context, name string) error {
 
 	return err
 }
-
