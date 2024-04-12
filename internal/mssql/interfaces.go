@@ -13,6 +13,10 @@ type SqlClient interface {
 	ReadDatabasePermission(ctx context.Context, id string) (DatabasePermission, error)
 	GrantDatabasePermission(ctx context.Context, principal string, permission string) (DatabasePermission, error)
 	RevokeDatabasePermission(ctx context.Context, principal string, permission string) error
+	GetRole(ctx context.Context, name string) (Role, error)
+	CreateRole(ctx context.Context, name string) (Role, error)
+	UpdateRole(ctx context.Context, name string, updateName string) (Role, error)
+	DeleteRole(ctx context.Context, name string) error
 }
 
 type User struct {
@@ -44,8 +48,14 @@ type UpdateUser struct {
 	DefaultSchema string
 }
 
+<<<<<<< HEAD
 type DatabasePermission struct {
 	Id          string
 	Principal	string
 	Permission	string
+=======
+type Role struct {
+	Id string
+  Grants []string
+>>>>>>> feat/role-creation
 }

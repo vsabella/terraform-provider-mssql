@@ -225,6 +225,7 @@ AND M.name = @p2
 `
 
 	tflog.Debug(ctx, fmt.Sprintf("Reading Role Assignment role %s, member %s: cmd: %s", role, member, cmd))
+
 	result := m.conn.QueryRowContext(ctx,
 		cmd,
 		role,
@@ -339,4 +340,42 @@ func (m client) RevokeDatabasePermission(ctx context.Context, principal string, 
 	}
 
 	return nil
+}
+
+func (m client) GetRole(ctx context.Context, name string) (Role, error) {
+	role := Role{
+		Id: name,
+	}
+
+	query := fmt.Sprintf("SELECT [name] FROM sysusers WHERE issqlrole = 1 AND [name] = '%s'", name)
+
+	tflog.Debug(ctx, fmt.Sprintf("Executing refresh query for role %s", name))
+	result := m.conn.QueryRowContext(ctx, query)
+
+	err := result.Scan(&role.Id)
+	return role, err
+}
+
+func (m client) CreateRole(ctx context.Context, name string) (Role, error) {
+	var role Role
+	query := fmt.Sprintf("CREATE ROLE %s", role.Id)
+	_, err := m.conn.ExecContext(ctx, query)
+
+	role, err = m.GetRole(ctx, name)
+	return role, err
+}
+
+func (m client) UpdateRole(ctx context.Context, name string, updateName string) (Role, error) {
+	var update Role
+	// TODO update role.name to update
+	update = role
+	return m.GetRole(ctx, update.Id)
+}
+
+func (m client) DeleteRole(ctx context.Context, name string) error {
+	query := fmt.Sprintf("DROP ROLE %s", name)
+	tflog.Debug(ctx, fmt.Sprintf("Deleting Role %s: cmd: %s", name, query))
+	_, err := m.conn.ExecContext(ctx, query)
+
+	return err
 }
