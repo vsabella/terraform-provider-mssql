@@ -301,9 +301,29 @@ func (m client) CreateRole(ctx context.Context, name string) (Role, error) {
   cmd := `CREATE ROLE @name 
   `
   
-  result := m.conn.QueryRowContext(ctx, cmd, sql.Named("name", name))
+  _ = m.conn.QueryRowContext(ctx, cmd, sql.Named("name", name))
 
-  role, err = m.GetRole(ctx, name)
+  role, err := m.GetRole(ctx, name)
 	return role, err
+}
+
+func (m client) UpdateRole(ctx context.Context, role Role) (Role, error) {
+  var update Role
+  // TODO
+  update = role	
+  return m.GetRole(ctx, update.Id)
+}
+
+
+func (m client) DeleteRole(ctx context.Context, name string) error {
+	cmd := `DROP ROLE @name`
+
+	tflog.Debug(ctx, fmt.Sprintf("Deleting Role %s: cmd: %s", name, cmd))
+	_, err := m.conn.ExecContext(ctx,
+		cmd,
+		name,
+	)
+
+	return err
 }
 
