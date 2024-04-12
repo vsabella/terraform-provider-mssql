@@ -48,14 +48,13 @@ type UpdateUser struct {
 	DefaultSchema string
 }
 
-<<<<<<< HEAD
 type DatabasePermission struct {
 	Id          string
 	Principal	string
 	Permission	string
-=======
+}
+
 type Role struct {
 	Id string
   Grants []string
->>>>>>> feat/role-creation
 }
