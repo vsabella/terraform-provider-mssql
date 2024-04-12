@@ -277,3 +277,33 @@ func (m client) UnassignRole(ctx context.Context, role string, principal string)
 
 	return err
 }
+
+func (m client) GetRole(ctx context.Context, name string) (Role, error) {
+  role := Role{
+    Id: name,
+  }
+
+  cmd := `SELECT
+    [name] as id,
+FROM sysusers
+WHERE issqlrole = 1 AND name = @name`
+
+	tflog.Debug(ctx, fmt.Sprintf("Executing refresh query for database %s", name))
+	result := m.conn.QueryRowContext(ctx, cmd, sql.Named("name", name))
+
+	err := result.Scan(&role.Id)
+	return role, err
+}
+
+func (m client) CreateRole(ctx context.Context, name string) (Role, error) {
+  var role Role
+
+  cmd := `CREATE ROLE @name 
+  `
+  
+  result := m.conn.QueryRowContext(ctx, cmd, sql.Named("name", name))
+
+  role, err = m.GetRole(ctx, name)
+	return role, err
+}
+
