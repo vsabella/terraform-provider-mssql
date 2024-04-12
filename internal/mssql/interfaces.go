@@ -15,7 +15,7 @@ type SqlClient interface {
 	RevokeDatabasePermission(ctx context.Context, principal string, permission string) error
 	GetRole(ctx context.Context, name string) (Role, error)
 	CreateRole(ctx context.Context, name string) (Role, error)
-	UpdateRole(ctx context.Context, name string, updateName string) (Role, error)
+	UpdateRole(ctx context.Context, role Role) (Role, error)
 	DeleteRole(ctx context.Context, name string) error
 }
 

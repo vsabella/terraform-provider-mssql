@@ -365,10 +365,10 @@ func (m client) CreateRole(ctx context.Context, name string) (Role, error) {
 	return role, err
 }
 
-func (m client) UpdateRole(ctx context.Context, name string, updateName string) (Role, error) {
+func (m client) UpdateRole(ctx context.Context, role Role) (Role, error) {
 	var update Role
 	// TODO update role.name to update
-	update = role
+	update.Id = role.Id
 	return m.GetRole(ctx, update.Id)
 }
 
