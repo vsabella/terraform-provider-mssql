@@ -152,7 +152,7 @@ func (r *MssqlRoleAssignmentResource) Update(ctx context.Context, req resource.U
 		return
 	}
 
-	data.Id = types.StringValue(core.NormalizeValue(data.Id.String(), cur.Id))
+	data.Id = types.StringValue(core.NormalizeValue(cur.Id, data.Id.String()))
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+  "strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -14,6 +15,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	"github.com/vsabella/terraform-provider-mssql/internal/core"
+  "github.com/vsabella/terraform-provider-mssql/internal/mssql"
 )
 
 // Ensure provider defined types fully satisfy framework interfaces.
@@ -124,7 +126,7 @@ func (r *MssqlPermissionResource) Create(ctx context.Context, req resource.Creat
 		return
 	}
 
-	perm, err := r.ctx.Client.GrantDatabasePermission(ctx, data.Principal.ValueString(), data.Permission.ValueString())
+	perm, err := r.ctx.Client.GrantDatabasePermission(ctx, data.Principal.ValueString(), strings.ToUpper(data.Permission.ValueString()))
 	if err != nil {
 		resp.Diagnostics.AddError(fmt.Sprintf("Error granting permission %s to principal %s", data.Permission.ValueString(), data.Principal.ValueString()), err.Error())
 		return
@@ -147,8 +149,12 @@ func (r *MssqlPermissionResource) Update(ctx context.Context, req resource.Updat
 		return
 	}
 	// Normalize `data` here
-	// ...
-	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
+  permission := mssql.DatabasePermission{
+    Id: data.Id.ValueString(),
+    Principal: data.Principal.ValueString(),
+    Permission: strings.ToUpper(data.Permission.ValueString()),
+  } 
+	resp.Diagnostics.Append(resp.State.Set(ctx, &permission)...)
 }
 
 func (r *MssqlPermissionResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
@@ -160,7 +166,7 @@ func (r *MssqlPermissionResource) Delete(ctx context.Context, req resource.Delet
 		return
 	}
 
-	err := r.ctx.Client.RevokeDatabasePermission(ctx, data.Principal.ValueString(), data.Permission.ValueString())
+	err := r.ctx.Client.RevokeDatabasePermission(ctx, data.Principal.ValueString(), strings.ToUpper(data.Permission.ValueString()))
 	if err != nil {
 		resp.Diagnostics.AddError("Unable to revoke permission", fmt.Sprintf("Unable to revoke permission %s from principal %s", data.Permission.ValueString(), data.Principal.ValueString(), err))
 		return
