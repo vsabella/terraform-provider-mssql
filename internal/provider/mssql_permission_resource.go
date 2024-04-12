@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-  "strings"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -15,7 +15,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	"github.com/vsabella/terraform-provider-mssql/internal/core"
-  "github.com/vsabella/terraform-provider-mssql/internal/mssql"
+	"github.com/vsabella/terraform-provider-mssql/internal/mssql"
 )
 
 // Ensure provider defined types fully satisfy framework interfaces.
@@ -149,11 +149,11 @@ func (r *MssqlPermissionResource) Update(ctx context.Context, req resource.Updat
 		return
 	}
 	// Normalize `data` here
-  permission := mssql.DatabasePermission{
-    Id: data.Id.ValueString(),
-    Principal: data.Principal.ValueString(),
-    Permission: strings.ToUpper(data.Permission.ValueString()),
-  } 
+	permission := mssql.DatabasePermission{
+		Id:         data.Id.ValueString(),
+		Principal:  data.Principal.ValueString(),
+		Permission: strings.ToUpper(data.Permission.ValueString()),
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &permission)...)
 }
 
