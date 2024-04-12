@@ -168,7 +168,7 @@ func (r *MssqlPermissionResource) Delete(ctx context.Context, req resource.Delet
 
 	err := r.ctx.Client.RevokeDatabasePermission(ctx, data.Principal.ValueString(), strings.ToUpper(data.Permission.ValueString()))
 	if err != nil {
-		resp.Diagnostics.AddError("Unable to revoke permission", fmt.Sprintf("Unable to revoke permission %s from principal %s", data.Permission.ValueString(), data.Principal.ValueString(), err))
+		resp.Diagnostics.AddError("Unable to revoke permission", fmt.Sprintf("Unable to revoke permission %s from principal %s", data.Permission.ValueString(), data.Principal.ValueString()))
 		return
 	}
 }
