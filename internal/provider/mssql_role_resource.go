@@ -16,7 +16,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	"github.com/vsabella/terraform-provider-mssql/internal/core"
-	"github.com/vsabella/terraform-provider-mssql/internal/mssql"
 )
 
 // Ensure provider defined types fully satisfy framework interfaces.
@@ -98,27 +97,13 @@ func (r *MssqlRoleResource) Create(ctx context.Context, req resource.CreateReque
 }
 
 func (r *MssqlRoleResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var data MssqlRoleResourceModel
+	var data MssqlPermissionResourceModel
 
 	// Read Terraform plan data into the model
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
-
-	role := mssql.Role{
-		Id: data.Id.ValueString(),
-	}
-
-	cur, err := r.ctx.Client.UpdateRole(ctx, role)
-	if err != nil {
-		resp.Diagnostics.AddError("could not update role", err.Error())
-		return
-	}
-
-	data.Id = types.StringValue(cur.Id)
-
-	// Save updated data into Terraform state
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 

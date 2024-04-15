@@ -15,7 +15,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	"github.com/vsabella/terraform-provider-mssql/internal/core"
-	"github.com/vsabella/terraform-provider-mssql/internal/mssql"
 )
 
 // Ensure provider defined types fully satisfy framework interfaces.
@@ -148,13 +147,7 @@ func (r *MssqlPermissionResource) Update(ctx context.Context, req resource.Updat
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	// Normalize `data` here
-	permission := mssql.DatabasePermission{
-		Id:         data.Id.ValueString(),
-		Principal:  data.Principal.ValueString(),
-		Permission: strings.ToUpper(data.Permission.ValueString()),
-	}
-	resp.Diagnostics.Append(resp.State.Set(ctx, &permission)...)
+	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
 func (r *MssqlPermissionResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {

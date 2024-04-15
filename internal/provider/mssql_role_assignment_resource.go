@@ -145,14 +145,12 @@ func (r *MssqlRoleAssignmentResource) Update(ctx context.Context, req resource.U
 		return
 	}
 
-	cur, err := r.ctx.Client.ReadRoleMembership(ctx, data.Id.ValueString())
+	_, err := r.ctx.Client.ReadRoleMembership(ctx, data.Id.ValueString())
 
 	if err != nil {
 		resp.Diagnostics.AddError("Unable", fmt.Sprintf("Unable to read MssqlUser, got error: %s", err))
 		return
 	}
-
-	data.Id = types.StringValue(core.NormalizeValue(cur.Id, data.Id.String()))
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
