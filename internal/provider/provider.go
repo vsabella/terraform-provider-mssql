@@ -130,7 +130,7 @@ func (p *MssqlProvider) Resources(ctx context.Context) []func() resource.Resourc
 		NewMssqlUserResource,
 		NewMssqlRoleResource,
 		NewMssqlRoleAssignmentResource,
-		NewMssqlPermissionResource,
+		NewMssqlGrantResource,
 	}
 }
 

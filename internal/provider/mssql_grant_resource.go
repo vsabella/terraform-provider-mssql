@@ -18,31 +18,31 @@ import (
 )
 
 // Ensure provider defined types fully satisfy framework interfaces.
-var _ resource.Resource = &MssqlPermissionResource{}
-var _ resource.ResourceWithImportState = &MssqlPermissionResource{}
+var _ resource.Resource = &MssqlGrantResource{}
+var _ resource.ResourceWithImportState = &MssqlGrantResource{}
 
-func NewMssqlPermissionResource() resource.Resource {
-	return &MssqlPermissionResource{}
+func NewMssqlGrantResource() resource.Resource {
+	return &MssqlGrantResource{}
 }
 
-type MssqlPermissionResource struct {
+type MssqlGrantResource struct {
 	ctx core.ProviderData
 }
 
-type MssqlPermissionResourceModel struct {
+type MssqlGrantResourceModel struct {
 	Id         types.String `tfsdk:"id"`
 	Principal  types.String `tfsdk:"principal"`
 	Permission types.String `tfsdk:"permission"`
 }
 
-func (r *MssqlPermissionResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
+func (r *MssqlGrantResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
 	resp.TypeName = req.ProviderTypeName + "_permission"
 }
 
-func (r *MssqlPermissionResource) Schema(ctx context.Context, req resource.SchemaRequest, resp *resource.SchemaResponse) {
+func (r *MssqlGrantResource) Schema(ctx context.Context, req resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		// This description is used by the documentation generator and the language server.
-		MarkdownDescription: "DB permission resource",
+		MarkdownDescription: "DB grant resource",
 
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
@@ -70,7 +70,7 @@ func (r *MssqlPermissionResource) Schema(ctx context.Context, req resource.Schem
 	}
 }
 
-func (r *MssqlPermissionResource) Configure(ctx context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
+func (r *MssqlGrantResource) Configure(ctx context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	// Prevent panic if the provider has not been configured.
 	if req.ProviderData == nil {
 		return
@@ -89,8 +89,8 @@ func (r *MssqlPermissionResource) Configure(ctx context.Context, req resource.Co
 	r.ctx = *client
 }
 
-func (r *MssqlPermissionResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
-	var data MssqlPermissionResourceModel
+func (r *MssqlGrantResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+	var data MssqlGrantResourceModel
 
 	// Read Terraform prior state data into the model
 	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
@@ -115,8 +115,8 @@ func (r *MssqlPermissionResource) Read(ctx context.Context, req resource.ReadReq
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
-func (r *MssqlPermissionResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
-	var data MssqlPermissionResourceModel
+func (r *MssqlGrantResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+	var data MssqlGrantResourceModel
 
 	// Read Terraform plan data into the model
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
@@ -139,8 +139,8 @@ func (r *MssqlPermissionResource) Create(ctx context.Context, req resource.Creat
 
 }
 
-func (r *MssqlPermissionResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var data MssqlPermissionResourceModel
+func (r *MssqlGrantResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	var data MssqlGrantResourceModel
 
 	// Read Terraform plan data into the model
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
@@ -150,8 +150,8 @@ func (r *MssqlPermissionResource) Update(ctx context.Context, req resource.Updat
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
-func (r *MssqlPermissionResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
-	var data MssqlPermissionResourceModel
+func (r *MssqlGrantResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+	var data MssqlGrantResourceModel
 
 	// Read Terraform prior state data into the model
 	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
@@ -166,6 +166,6 @@ func (r *MssqlPermissionResource) Delete(ctx context.Context, req resource.Delet
 	}
 }
 
-func (r *MssqlPermissionResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+func (r *MssqlGrantResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
 }

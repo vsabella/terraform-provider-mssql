@@ -279,8 +279,8 @@ func (m client) UnassignRole(ctx context.Context, role string, principal string)
 	return err
 }
 
-func (m client) ReadDatabasePermission(ctx context.Context, id string) (DatabasePermission, error) {
-	var DatabasePermission DatabasePermission
+func (m client) ReadDatabasePermission(ctx context.Context, id string) (DatabaseGrantPermission, error) {
+	var DatabaseGrantPermission DatabaseGrantPermission
 	principal := strings.Split(id, "/")[0]
 	permission := strings.Split(id, "/")[1]
 
@@ -302,20 +302,20 @@ func (m client) ReadDatabasePermission(ctx context.Context, id string) (Database
 	tflog.Debug(ctx, fmt.Sprintf("Reading DB permission [principal: %s, permission: %s]", principal, permission))
 	result := m.conn.QueryRowContext(ctx, cmd, principal, permission)
 
-	err := result.Scan(&DatabasePermission.Principal, &DatabasePermission.Permission)
+	err := result.Scan(&DatabaseGrantPermission.Principal, &DatabaseGrantPermission.Permission)
 	if err != nil {
 		tflog.Warn(ctx, fmt.Sprintf("failed to scan result: %v", err))
-		return DatabasePermission, err
+		return DatabaseGrantPermission, err
 	}
 
-	DatabasePermission.Id = fmt.Sprintf("%s/%s", DatabasePermission.Principal, strings.ToLower(DatabasePermission.Permission))
+	DatabaseGrantPermission.Id = fmt.Sprintf("%s/%s", DatabaseGrantPermission.Principal, strings.ToLower(DatabaseGrantPermission.Permission))
 	tflog.Debug(ctx, fmt.Sprintf("SUCCESS Reading DB permission principal: %s, permission: %s", principal, permission))
 
-	return DatabasePermission, nil
+	return DatabaseGrantPermission, nil
 }
 
-func (m client) GrantDatabasePermission(ctx context.Context, principal string, permission string) (DatabasePermission, error) {
-	var DatabasePermission DatabasePermission
+func (m client) GrantDatabasePermission(ctx context.Context, principal string, permission string) (DatabaseGrantPermission, error) {
+	var DatabaseGrantPermission DatabaseGrantPermission
 
 	query := fmt.Sprintf("GRANT %s TO %s", permission, principal)
 
@@ -323,7 +323,7 @@ func (m client) GrantDatabasePermission(ctx context.Context, principal string, p
 
 	_, err := m.conn.ExecContext(ctx, query)
 	if err != nil {
-		return DatabasePermission, fmt.Errorf("failed to execute grant query: %v", err)
+		return DatabaseGrantPermission, fmt.Errorf("failed to execute grant query: %v", err)
 	}
 
 	return m.ReadDatabasePermission(ctx, fmt.Sprintf("%s/%s", principal, strings.ToUpper(permission)))

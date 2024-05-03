@@ -97,7 +97,7 @@ func (r *MssqlRoleResource) Create(ctx context.Context, req resource.CreateReque
 }
 
 func (r *MssqlRoleResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var data MssqlPermissionResourceModel
+	var data MssqlGrantResource
 
 	// Read Terraform plan data into the model
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
