@@ -55,5 +55,6 @@ type DatabaseGrantPermission struct {
 }
 
 type Role struct {
-	Id string
+	Id   string
+	Name string
 }

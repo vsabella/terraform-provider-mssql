@@ -31,7 +31,8 @@ type MssqlRoleResource struct {
 }
 
 type MssqlRoleResourceModel struct {
-	Id types.String `tfsdk:"id"`
+	Id   types.String `tfsdk:"id"`
+	Name types.String `tfsdk:"name"`
 }
 
 func (r *MssqlRoleResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -45,9 +46,15 @@ func (r *MssqlRoleResource) Schema(ctx context.Context, req resource.SchemaReque
 
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
-				Required: true,
+				Computed: true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"name": schema.StringAttribute{
+				Required: true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
 				},
 			},
 		},
@@ -83,7 +90,7 @@ func (r *MssqlRoleResource) Create(ctx context.Context, req resource.CreateReque
 		return
 	}
 
-	role, err := r.ctx.Client.CreateRole(ctx, data.Id.ValueString())
+	role, err := r.ctx.Client.CreateRole(ctx, data.Name.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError(fmt.Sprintf("Error creating role %s", data.Id.ValueString()), err.Error())
 		return

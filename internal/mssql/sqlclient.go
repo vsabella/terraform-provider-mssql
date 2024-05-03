@@ -344,7 +344,8 @@ func (m client) RevokeDatabasePermission(ctx context.Context, principal string, 
 
 func (m client) GetRole(ctx context.Context, name string) (Role, error) {
 	role := Role{
-		Id: name,
+		Id:   name,
+		Name: name,
 	}
 
 	query := fmt.Sprintf("SELECT [name] FROM sysusers WHERE issqlrole = 1 AND [name] = '%s'", name)
