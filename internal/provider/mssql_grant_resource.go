@@ -36,7 +36,7 @@ type MssqlGrantResourceModel struct {
 }
 
 func (r *MssqlGrantResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
-	resp.TypeName = req.ProviderTypeName + "_permission"
+	resp.TypeName = req.ProviderTypeName + "_grant"
 }
 
 func (r *MssqlGrantResource) Schema(ctx context.Context, req resource.SchemaRequest, resp *resource.SchemaResponse) {
