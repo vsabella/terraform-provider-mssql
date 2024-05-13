@@ -348,11 +348,9 @@ func (m client) GetRole(ctx context.Context, name string) (Role, error) {
 		Name: name,
 	}
 
-	query := fmt.Sprintf("SELECT [name] FROM sysusers WHERE issqlrole = 1 AND [name] = '%s'", name)
-
-	tflog.Debug(ctx, fmt.Sprintf("Executing refresh query for role %s", name))
-	result := m.conn.QueryRowContext(ctx, query)
-
+	cmd := `SELECT [name] FROM sys.database_principals WHERE [type] = 'R' AND [name] = @name`
+	tflog.Debug(ctx, fmt.Sprintf("Executing refresh query for role %s: command %s", name, cmd))
+	result := m.conn.QueryRowContext(ctx, cmd, sql.Named("name", name))
 	err := result.Scan(&role.Id)
 	return role, err
 }
