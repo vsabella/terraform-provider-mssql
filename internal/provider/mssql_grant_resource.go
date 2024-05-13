@@ -31,8 +31,8 @@ type MssqlGrantResource struct {
 
 type MssqlGrantResourceModel struct {
 	Id         types.String `tfsdk:"id"`
-	Principal  types.String `tfsdk:"principal"`
 	Permission types.String `tfsdk:"permission"`
+	Principal  types.String `tfsdk:"principal"`
 }
 
 func (r *MssqlGrantResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -52,15 +52,15 @@ func (r *MssqlGrantResource) Schema(ctx context.Context, req resource.SchemaRequ
 					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
-			"principal": schema.StringAttribute{
-				MarkdownDescription: "`<principal>`.",
+			"permission": schema.StringAttribute{
+				MarkdownDescription: "Name of database-level SQL permission. For full list of supported permissions, see [docs](https://learn.microsoft.com/en-us/sql/t-sql/statements/grant-database-permissions-transact-sql?view=azuresqldb-current#remarks)",
 				Required:            true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
 			},
-			"permission": schema.StringAttribute{
-				MarkdownDescription: "Name of database-level SQL permission. For full list of supported permissions, see [docs](https://learn.microsoft.com/en-us/sql/t-sql/statements/grant-database-permissions-transact-sql?view=azuresqldb-current#remarks)",
+			"principal": schema.StringAttribute{
+				MarkdownDescription: "Database principal to grant permission to.",
 				Required:            true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
@@ -105,7 +105,7 @@ func (r *MssqlGrantResource) Read(ctx context.Context, req resource.ReadRequest,
 		resp.State.RemoveResource(ctx)
 		return
 	} else if err != nil {
-		resp.Diagnostics.AddError("Unable", fmt.Sprintf("Unable to read Permission, got error: %s", err))
+		resp.Diagnostics.AddError("Unable", fmt.Sprintf("Unable to read grant. Error: %s", err))
 		return
 	}
 
