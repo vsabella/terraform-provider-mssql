@@ -225,6 +225,7 @@ AND M.name = @p2
 `
 
 	tflog.Debug(ctx, fmt.Sprintf("Reading Role Assignment role %s, member %s: cmd: %s", role, member, cmd))
+
 	result := m.conn.QueryRowContext(ctx,
 		cmd,
 		role,
@@ -274,6 +275,106 @@ func (m client) UnassignRole(ctx context.Context, role string, principal string)
 		role,
 		principal,
 	)
+
+	return err
+}
+
+func (m client) ReadDatabasePermission(ctx context.Context, id string) (DatabaseGrantPermission, error) {
+	var DatabaseGrantPermission DatabaseGrantPermission
+	principal := strings.Split(id, "/")[0]
+	permission := strings.Split(id, "/")[1]
+
+	cmd := `
+		SELECT
+			dp.[name] AS [principal],
+			sdp.[permission_name] AS [permission]
+		FROM
+			sys.database_permissions AS sdp
+		JOIN
+			sys.database_principals AS dp ON sdp.grantee_principal_id = dp.principal_id
+		WHERE
+			sdp.[class] = 0
+			AND sdp.[state] IN ('G', 'W')
+			AND dp.[name] = @p1
+			AND sdp.[permission_name] = @p2;
+	`
+
+	tflog.Debug(ctx, fmt.Sprintf("Reading DB permission [principal: %s, permission: %s]", principal, permission))
+	result := m.conn.QueryRowContext(ctx, cmd, principal, permission)
+
+	err := result.Scan(&DatabaseGrantPermission.Principal, &DatabaseGrantPermission.Permission)
+	if err != nil {
+		tflog.Warn(ctx, fmt.Sprintf("failed to scan result: %v", err))
+		return DatabaseGrantPermission, err
+	}
+
+	DatabaseGrantPermission.Id = fmt.Sprintf("%s/%s", DatabaseGrantPermission.Principal, strings.ToLower(DatabaseGrantPermission.Permission))
+	tflog.Debug(ctx, fmt.Sprintf("SUCCESS Reading DB permission principal: %s, permission: %s", principal, permission))
+
+	return DatabaseGrantPermission, nil
+}
+
+func (m client) GrantDatabasePermission(ctx context.Context, principal string, permission string) (DatabaseGrantPermission, error) {
+	var DatabaseGrantPermission DatabaseGrantPermission
+
+	query := fmt.Sprintf("GRANT %s TO %s", permission, principal)
+
+	tflog.Debug(ctx, fmt.Sprintf("Granting permission %s to %s [%s]", permission, principal, query))
+
+	_, err := m.conn.ExecContext(ctx, query)
+	if err != nil {
+		return DatabaseGrantPermission, fmt.Errorf("failed to execute grant query: %v", err)
+	}
+
+	return m.ReadDatabasePermission(ctx, fmt.Sprintf("%s/%s", principal, strings.ToUpper(permission)))
+}
+
+func (m client) RevokeDatabasePermission(ctx context.Context, principal string, permission string) error {
+	query := fmt.Sprintf("REVOKE %s TO %s CASCADE", permission, principal)
+
+	tflog.Debug(ctx, fmt.Sprintf("Revoking permission %s from user %s", permission, principal))
+
+	_, err := m.conn.ExecContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("failed to execute revoke query: %v", err)
+	}
+
+	return nil
+}
+
+func (m client) GetRole(ctx context.Context, name string) (Role, error) {
+	role := Role{
+		Id:   name,
+		Name: name,
+	}
+
+	cmd := `SELECT [name] FROM sys.database_principals WHERE [type] = 'R' AND [name] = @name`
+	tflog.Debug(ctx, fmt.Sprintf("Executing refresh query for role %s: command %s", name, cmd))
+	result := m.conn.QueryRowContext(ctx, cmd, sql.Named("name", name))
+	err := result.Scan(&role.Id)
+	return role, err
+}
+
+func (m client) CreateRole(ctx context.Context, name string) (Role, error) {
+	var role Role
+	query := fmt.Sprintf("CREATE ROLE [%s]", name)
+	_, _ = m.conn.ExecContext(ctx, query)
+
+	role, err := m.GetRole(ctx, name)
+	return role, err
+}
+
+func (m client) UpdateRole(ctx context.Context, role Role) (Role, error) {
+	var update Role
+	// TODO update role.name to update
+	update.Id = role.Id
+	return m.GetRole(ctx, update.Id)
+}
+
+func (m client) DeleteRole(ctx context.Context, name string) error {
+	query := fmt.Sprintf("DROP ROLE %s", name)
+	tflog.Debug(ctx, fmt.Sprintf("Deleting Role %s: cmd: %s", name, query))
+	_, err := m.conn.ExecContext(ctx, query)
 
 	return err
 }
