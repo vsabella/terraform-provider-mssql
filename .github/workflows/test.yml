@@ -81,7 +81,13 @@ jobs:
           terraform_version: ${{ matrix.terraform }}
           terraform_wrapper: false
       - run: go mod download
+      - name: Start MSSQL
+        working-directory: ./docker_compose
+        run: start.sh
       - env:
           TF_ACC: "1"
         run: go test -v -cover ./internal/provider/
         timeout-minutes: 10
+      - name: Stop MSSQL
+        working-directory: ./docker_compose
+        run: stop.sh
