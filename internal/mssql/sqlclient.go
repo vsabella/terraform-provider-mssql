@@ -357,7 +357,7 @@ func (m client) GetRole(ctx context.Context, name string) (Role, error) {
 
 func (m client) CreateRole(ctx context.Context, name string) (Role, error) {
 	var role Role
-	query := fmt.Sprintf("CREATE ROLE %s", name)
+	query := fmt.Sprintf("CREATE ROLE [%s]", name)
 	_, _ = m.conn.ExecContext(ctx, query)
 
 	role, err := m.GetRole(ctx, name)
