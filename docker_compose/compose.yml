@@ -1,20 +1,21 @@
-version: '3.8'
 configs:
   migrations:
     file: ../
 services:
   db:
     # the Microsoft SQL Server 2019 (mssql/server:2019) is match with Microsoft SQL Azure 12.0.2000.8
-    image: mcr.microsoft.com/mssql/server:2019-CU25-ubuntu-20.04
+    image: mcr.microsoft.com/mssql/server:2022-latest
     platform: linux/amd64
     pull_policy: missing
     environment:
-      ACCEPT_EULA: "y"
-      SA_PASSWORD: "Testing@6CD21E2E-7028-4AE0-923E-B11288822489"
+      ACCEPT_EULA: y
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD}
     healthcheck:
-      test: /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P ${SA_PASSWORD} -Q 'select 1'
+      test: /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P '${MSSQL_SA_PASSWORD}' -Q 'select 1'
       interval: 15s
       start_period: 15s
       timeout: 10s
     ports:
       - "127.0.0.1:1433:1433"
+    volumes:
+      - ${PWD}/setup.sql:/setup.sql
