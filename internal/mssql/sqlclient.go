@@ -99,7 +99,7 @@ func buildCreateUser(create CreateUser) (string, []any, error) {
 
 	// Non Options
 	if create.External {
-		cmdBuilder.WriteString(" + ' FROM EXTERNAL PROVIDER'")
+		cmdBuilder.WriteString(" + ' FROM EXTERNAL PROVIDER '")
 	}
 
 	// Begin Options. Easy since we make DefaultSchema required

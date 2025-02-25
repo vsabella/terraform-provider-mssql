@@ -52,7 +52,7 @@ func Test_buildCreateUser(t *testing.T) {
 				External:      true,
 				DefaultSchema: "dbo",
 			}},
-			want:  `DECLARE @sql NVARCHAR(max);SET @sql = 'CREATE USER ' + QUOTENAME(@username) + ' FROM EXTERNAL PROVIDER' + 'WITH ' + 'DEFAULT_SCHEMA = ' + QUOTENAME(@default_schema);EXEC (@sql);`,
+			want:  `DECLARE @sql NVARCHAR(max);SET @sql = 'CREATE USER ' + QUOTENAME(@username) + ' FROM EXTERNAL PROVIDER ' + 'WITH ' + 'DEFAULT_SCHEMA = ' + QUOTENAME(@default_schema);EXEC (@sql);`,
 			want1: []any{sql.Named("username", "bob@contoso.com"), sql.Named("default_schema", "dbo")},
 		},
 		{
