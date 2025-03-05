@@ -60,6 +60,7 @@ provider "mssql" {
 
 #### MSSQL User
 Creates a database user in SQL Server.
+Using Regular username and password:
 
 ```hcl
 resource "mssql_user" "example" {
@@ -67,6 +68,16 @@ resource "mssql_user" "example" {
   password        = "example_password"
   default_schema  = "dbo"
   external        = false
+}
+```
+
+Using a Managed Identity:
+
+```hcl
+resource "mssql_user" "example" {
+  username        = "managed_identity_name"
+  default_schema  = "dbo"
+  external        = true
 }
 ```
 
