@@ -60,6 +60,7 @@ provider "mssql" {
 
 #### MSSQL User
 Creates a database user in SQL Server.
+
 Using Regular username and password:
 
 ```hcl
