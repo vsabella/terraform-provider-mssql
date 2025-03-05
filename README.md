@@ -170,3 +170,6 @@ TF_ACC=1 go test ./...
 4. Push to the branch (`git push origin feature/amazing-feature`)
 5. Open a Pull Request
 
+## License
+
+This project is licensed under the MPL-2.0 License - see the [LICENSE](LICENSE) file for details.
