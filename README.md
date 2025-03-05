@@ -1,60 +1,172 @@
-# Terraform Provider Scaffolding (Terraform Plugin Framework)
+# Terraform Provider for Microsoft SQL Server
 
-_This template repository is built on the [Terraform Plugin Framework](https://github.com/hashicorp/terraform-plugin-framework). The template repository built on the [Terraform Plugin SDK](https://github.com/hashicorp/terraform-plugin-sdk) can be found at [terraform-provider-scaffolding](https://github.com/hashicorp/terraform-provider-scaffolding). See [Which SDK Should I Use?](https://developer.hashicorp.com/terraform/plugin/framework-benefits) in the Terraform documentation for additional information._
-
-This repository is a *template* for a [Terraform](https://www.terraform.io) provider. It is intended as a starting point for creating Terraform providers, containing:
-
-- A resource and a data source (`internal/provider/`),
-- Examples (`examples/`) and generated documentation (`docs/`),
-- Miscellaneous meta files.
-
-These files contain boilerplate code that you will need to edit to create your own Terraform provider. Tutorials for creating Terraform providers can be found on the [HashiCorp Developer](https://developer.hashicorp.com/terraform/tutorials/providers-plugin-framework) platform. _Terraform Plugin Framework specific guides are titled accordingly._
-
-Please see the [GitHub template repository documentation](https://help.github.com/en/github/creating-cloning-and-archiving-repositories/creating-a-repository-from-a-template) for how to create a new repository from this template on GitHub.
-
-Once you've written your provider, you'll want to [publish it on the Terraform Registry](https://developer.hashicorp.com/terraform/registry/providers/publishing) so that others can use it.
+This provider allows you to manage Microsoft SQL Server resources using Terraform. It supports both SQL Server authentication and Azure AD authentication.
 
 ## Requirements
 
-- [Terraform](https://developer.hashicorp.com/terraform/downloads) >= 1.0
-- [Go](https://golang.org/doc/install) >= 1.21
+- [Terraform](https://www.terraform.io/downloads.html) >= 1.0
+- [Go](https://golang.org/doc/install) >= 1.19
+- Microsoft SQL Server instance (on-premises or Azure SQL Database)
 
 ## Building The Provider
 
 1. Clone the repository
-1. Enter the repository directory
-1. Build the provider using the Go `install` command:
-
-```shell
-go install
+```bash
+git clone https://github.com/vsabella/terraform-provider-mssql.git
+cd terraform-provider-mssql
 ```
 
-## Adding Dependencies
-
-This provider uses [Go modules](https://github.com/golang/go/wiki/Modules).
-Please see the Go documentation for the most up to date information about using Go modules.
-
-To add a new dependency `github.com/author/dependency` to your Terraform provider:
-
-```shell
-go get github.com/author/dependency
-go mod tidy
+2. Build the provider
+```bash
+go build -o terraform-provider-mssql
 ```
 
-Then commit the changes to `go.mod` and `go.sum`.
+3. Install the provider
+```bash
+mkdir -p ~/.terraform.d/plugins/registry.terraform.io/vsabella/mssql/0.1.0/darwin_amd64
+cp terraform-provider-mssql ~/.terraform.d/plugins/registry.terraform.io/vsabella/mssql/0.1.0/darwin_amd64/
+```
 
 ## Using the provider
 
-Fill this in for each provider
+### Provider Configuration
 
-## Developing the Provider
+The provider supports two authentication methods:
 
-If you wish to work on the provider, you'll first need [Go](http://www.golang.org) installed on your machine (see [Requirements](#requirements) above).
+1. SQL Authentication:
+```hcl
+provider "mssql" {
+  host     = "your-server.database.windows.net"
+  port     = 1433
+  database = "your-database"
+  sql_auth = {
+    username = "your-username"
+    password = "your-password"
+  }
+}
+```
 
-To compile the provider, run `go install`. This will build the provider and put the provider binary in the `$GOPATH/bin` directory.
+2. Azure AD Authentication:
+```hcl
+provider "mssql" {
+  host         = "your-server.database.windows.net"
+  port         = 1433
+  database     = "your-database"
+  azure_ad_auth = true
+}
+```
 
-To generate or update documentation, run `go generate`.
+### Available Resources
 
-In order to run the full suite of Acceptance tests, run `make testacc`.
+#### MSSQL User
+Creates a database user in SQL Server.
 
-*Note:* Acceptance tests require modern docker/docker-compose. They creates an empty local SQL DB container to run the tests.  See [ci/run_acceptance.sh](ci/run_acceptance.sh)
+```hcl
+resource "mssql_user" "example" {
+  username        = "example_user"
+  password        = "example_password"
+  default_schema  = "dbo"
+  external        = false
+}
+```
+
+#### MSSQL Role
+Creates a database role.
+
+```hcl
+resource "mssql_role" "example" {
+  name = "example_role"
+}
+```
+
+#### MSSQL Role Assignment
+Assigns a user to a role.
+
+```hcl
+resource "mssql_role_assignment" "example" {
+  role   = mssql_role.example.name
+  member = mssql_user.example.username
+}
+```
+
+#### MSSQL Grant
+Grants database permissions to a user.
+
+```hcl
+resource "mssql_grant" "example" {
+  principal  = mssql_user.example.username
+  permission = "SELECT"
+}
+```
+
+### Example Usage
+
+Here's a complete example showing how to create a user, role, and assign permissions:
+
+```hcl
+terraform {
+  required_providers {
+    mssql = {
+      source = "vsabella/mssql"
+    }
+  }
+}
+
+provider "mssql" {
+  host     = "your-server.database.windows.net"
+  port     = 1433
+  database = "your-database"
+  sql_auth = {
+    username = "your-username"
+    password = "your-password"
+  }
+}
+
+# Create a database user
+resource "mssql_user" "app_user" {
+  username       = "app_user"
+  password       = "secure_password"
+  default_schema = "dbo"
+  external       = false
+}
+
+# Create a role for the application
+resource "mssql_role" "app_role" {
+  name = "app_role"
+}
+
+# Assign the user to the role
+resource "mssql_role_assignment" "app_role_assignment" {
+  role   = mssql_role.app_role.name
+  member = mssql_user.app_user.username
+}
+
+# Grant necessary permissions
+resource "mssql_grant" "app_permissions" {
+  principal  = mssql_user.app_user.username
+  permission = "SELECT"
+}
+```
+
+## Development
+
+### Running Tests
+
+```bash
+go test ./...
+```
+
+### Running Acceptance Tests
+
+```bash
+TF_ACC=1 go test ./...
+```
+
+## Contributing
+
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add some amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
