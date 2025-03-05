@@ -164,19 +164,6 @@ resource "mssql_grant" "app_permissions" {
 }
 ```
 
-## Development
-
-### Running Tests
-
-```bash
-go test ./...
-```
-
-### Running Acceptance Tests
-
-```bash
-TF_ACC=1 go test ./...
-```
 
 ## Contributing
 
