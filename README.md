@@ -197,9 +197,6 @@ go mod tidy
 
 Then commit the changes to `go.mod` and `go.sum`.
 
-## Using the provider
-
-Fill this in for each provider
 
 ## Developing the Provider
 
