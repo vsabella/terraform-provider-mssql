@@ -136,7 +136,7 @@ func (p *MssqlProvider) Configure(ctx context.Context, req provider.ConfigureReq
 		return
 	}
 
-	// Create Client Context
+	// Create Client Context.
 	var client *core.ProviderData
 	if data.SqlAuth != nil {
 		client = &core.ProviderData{

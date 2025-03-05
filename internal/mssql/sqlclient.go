@@ -36,7 +36,7 @@ func NewClient(host string, port int64, database string, username string, passwo
 	return c
 }
 
-// NewAzureADClient creates a new SQL client authenticated via Azure AD
+// NewAzureADClient creates a new SQL client authenticated via Azure AD.
 func NewAzureADClient(host string, port int64, database string) (SqlClient, error) {
 	if port <= 0 {
 		port = 1433
@@ -48,7 +48,7 @@ func NewAzureADClient(host string, port int64, database string) (SqlClient, erro
 		return nil, fmt.Errorf("failed to get managed identity credential: %v", err)
 	}
 
-	// Get the token for SQL Database authentication
+	// Get the token for SQL Database authentication.
 	token, err := cred.GetToken(context.Background(), policy.TokenRequestOptions{
 		Scopes: []string{"https://database.windows.net/.default"},
 	})
@@ -56,8 +56,8 @@ func NewAzureADClient(host string, port int64, database string) (SqlClient, erro
 		return nil, fmt.Errorf("failed to get token: %v", err)
 	}
 
-	// Prepare the connection string with the acquired token
-	connString := fmt.Sprintf("server=%s;database=%s;authentication=ActiveDirectoryMsi;access token=%s", host, database, token.Token)
+	// Prepare the connection string with the acquired token.
+	connString := fmt.Sprintf("server=%s;port=%d;database=%s;authentication=ActiveDirectoryMsi;access token=%s", host, port, database, token.Token)
 	conn, err := sql.Open("sqlserver", connString)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to SQL Server: %v", err)
