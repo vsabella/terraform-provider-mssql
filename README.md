@@ -63,7 +63,7 @@ Creates a database user in SQL Server.
 
 ***Using a username and password:***
 
-Note: Provider must configured with `sql_auth` defined (username and password).
+Note: Provider must configured with `sql_auth` defined with username and password. (Do not set `azure_ad_auth`)
 
 ```hcl
 resource "mssql_user" "example" {
@@ -76,7 +76,7 @@ resource "mssql_user" "example" {
 
 ***Using a Managed Identity:***
 
-Note: Provider must configured with `azure_ad_auth` = true. (`sql_auth` cannot be defined.)
+Note: Provider must configured with `azure_ad_auth` = true. (`sql_auth` cannot be defined)
 
 ```hcl
 resource "mssql_user" "example" {
