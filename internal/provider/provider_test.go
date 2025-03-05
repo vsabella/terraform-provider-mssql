@@ -25,6 +25,15 @@ provider "mssql" {
   }
 }
 `
+
+	// providerConfigAzureAD is a configuration for Azure AD authentication testing
+	providerConfigAzureAD = `
+provider "mssql" {
+  host         = "127.0.0.1"
+  database     = "testdb"
+  azure_ad_auth = true
+}
+`
 )
 
 // testAccProtoV6ProviderFactories are used to instantiate a provider during

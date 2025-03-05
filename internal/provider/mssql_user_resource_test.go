@@ -24,6 +24,14 @@ func TestAccMssqlUserResource(t *testing.T) {
 					resource.TestCheckResourceAttr("mssql_user.test", "default_schema", "dbo"),
 				),
 			},
+			{
+				Config: providerConfigAzureAD + testAccMssqlUserManagedIdentityResourceConfig(),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("mssql_user.test", "username", "testusername_mi"),
+					resource.TestCheckResourceAttr("mssql_user.test", "external", "true"),
+					resource.TestCheckResourceAttr("mssql_user.test", "default_schema", "dbo"),
+				),
+			},
 			// ImportState testing
 			//{
 			//	Config:            providerConfig,
@@ -56,6 +64,16 @@ func testAccMssqlUserResourceConfig() string {
 resource "mssql_user" "test" {
   username = "testusername"
   password = "testpassword-meet-requirements1234@@@"
+}
+`
+}
+
+func testAccMssqlUserManagedIdentityResourceConfig() string {
+	return `
+resource "mssql_user" "test" {
+  username = "testusername_mi"
+  password = ""
+  external = true
 }
 `
 }
