@@ -1,6 +1,6 @@
 # Terraform Provider for Microsoft SQL Server
 
-This provider allows you to manage Microsoft SQL Server resources using Terraform. It supports both SQL Server authentication and Azure AD authentication.
+This provider allows you to manage Microsoft SQL Server resources using Terraform. It supports both SQL Admin Username/Password authentication and Azure AD authentication.
 
 ## Requirements
 
