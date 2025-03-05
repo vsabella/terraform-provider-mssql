@@ -61,7 +61,7 @@ provider "mssql" {
 #### MSSQL User
 Creates a database user in SQL Server.
 
-Using a username and password:
+***Using a username and password:***
 
 Note: Provider must configured with `sql_auth` defined (username and password).
 
@@ -74,7 +74,7 @@ resource "mssql_user" "example" {
 }
 ```
 
-Using a Managed Identity:
+***Using a Managed Identity:***
 
 Note: Provider must configured with `azure_ad_auth` = true. (`sql_auth` cannot be defined.)
 
