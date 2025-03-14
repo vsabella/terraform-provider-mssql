@@ -143,7 +143,7 @@ func (p *MssqlProvider) Configure(ctx context.Context, req provider.ConfigureReq
 			Client: mssql.NewClient(data.Host.ValueString(), data.Port.ValueInt64(), data.Database.ValueString(), data.SqlAuth.Username.ValueString(), data.SqlAuth.Password.ValueString()),
 		}
 	} else if data.AzureADAuth.ValueBool() {
-		var db mssql.SqlClient
+		var sqlClient mssql.SqlClient
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
@@ -151,7 +151,7 @@ func (p *MssqlProvider) Configure(ctx context.Context, req provider.ConfigureReq
 				}
 			}()
 			var err error
-			db, err = mssql.NewAzureADClient(data.Host.ValueString(), data.Port.ValueInt64(), data.Database.ValueString())
+			sqlClient, err = mssql.NewAzureADClient(data.Host.ValueString(), data.Port.ValueInt64(), data.Database.ValueString())
 			if err != nil {
 				resp.Diagnostics.AddError("Failed to create Azure AD client", err.Error())
 			}
@@ -160,7 +160,7 @@ func (p *MssqlProvider) Configure(ctx context.Context, req provider.ConfigureReq
 			return
 		}
 		client = &core.ProviderData{
-			Client: db,
+			Client: sqlClient,
 		}
 	}
 

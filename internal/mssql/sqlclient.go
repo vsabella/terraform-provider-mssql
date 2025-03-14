@@ -7,10 +7,9 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
-	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	_ "github.com/microsoft/go-mssqldb"
+	"github.com/microsoft/go-mssqldb/azuread"
 )
 
 type client struct {
@@ -42,25 +41,19 @@ func NewAzureADClient(host string, port int64, database string) (SqlClient, erro
 		port = 1433
 	}
 
-	// Set up Managed Identity credential using system-assigned identity
-	cred, err := azidentity.NewManagedIdentityCredential(nil)
+	connString := fmt.Sprintf("server=%s;database=%s;port=%d;fedauth=ActiveDirectoryDefault;", host, database, port)
+	conn, err := sql.Open(azuread.DriverName, connString)
+
 	if err != nil {
-		return nil, fmt.Errorf("failed to get managed identity credential: %v", err)
+		return nil, fmt.Errorf("failed to connect to SQL Server. Error: %v", err)
+	} else if conn == nil {
+		return nil, fmt.Errorf("failed to connect to SQL Server. conn == nil")
 	}
 
-	// Get the token for SQL Database authentication.
-	token, err := cred.GetToken(context.Background(), policy.TokenRequestOptions{
-		Scopes: []string{"https://database.windows.net/.default"},
-	})
+	// Test the connection
+	err = conn.Ping()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get token: %v", err)
-	}
-
-	// Prepare the connection string with the acquired token.
-	connString := fmt.Sprintf("server=%s;port=%d;database=%s;authentication=ActiveDirectoryMsi;access token=%s", host, port, database, token.Token)
-	conn, err := sql.Open("sqlserver", connString)
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to SQL Server: %v", err)
+		return nil, fmt.Errorf("failed to ping SQL Server: %v", err)
 	}
 
 	return &client{conn: conn}, nil
