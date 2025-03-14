@@ -34,6 +34,7 @@ provider "mssql" {}
 
 ### Optional
 
+- `azure_ad_auth` (Boolean) When true, Azure AD authentication will be used when connecting.
 - `port` (Number) MSSQL Server Port. Default: `1433`
 - `sql_auth` (Attributes) When provided, SQL authentication will be used when connecting. (see [below for nested schema](#nestedatt--sql_auth))
 

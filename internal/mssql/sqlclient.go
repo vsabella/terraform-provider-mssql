@@ -9,6 +9,7 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	_ "github.com/microsoft/go-mssqldb"
+	"github.com/microsoft/go-mssqldb/azuread"
 )
 
 type client struct {
@@ -32,6 +33,30 @@ func NewClient(host string, port int64, database string, username string, passwo
 		conn: conn,
 	}
 	return c
+}
+
+// NewAzureADClient creates a new SQL client authenticated via Azure AD.
+func NewAzureADClient(host string, port int64, database string) (SqlClient, error) {
+	if port <= 0 {
+		port = 1433
+	}
+
+	connString := fmt.Sprintf("server=%s;database=%s;port=%d;fedauth=ActiveDirectoryDefault;", host, database, port)
+	conn, err := sql.Open(azuread.DriverName, connString)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to SQL Server. Error: %v", err)
+	} else if conn == nil {
+		return nil, fmt.Errorf("failed to connect to SQL Server. conn == nil")
+	}
+
+	// Test the connection
+	err = conn.Ping()
+	if err != nil {
+		return nil, fmt.Errorf("failed to ping SQL Server: %v", err)
+	}
+
+	return &client{conn: conn}, nil
 }
 
 func (m client) GetUser(ctx context.Context, username string) (User, error) {

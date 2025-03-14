@@ -5,6 +5,7 @@ package provider
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/function"
@@ -35,10 +36,11 @@ type SqlAuth struct {
 }
 
 type MssqlProviderModel struct {
-	Host     types.String `tfsdk:"host"`
-	Port     types.Int64  `tfsdk:"port"`
-	Database types.String `tfsdk:"database"`
-	SqlAuth  *SqlAuth     `tfsdk:"sql_auth"`
+	Host        types.String `tfsdk:"host"`
+	Port        types.Int64  `tfsdk:"port"`
+	Database    types.String `tfsdk:"database"`
+	SqlAuth     *SqlAuth     `tfsdk:"sql_auth"`
+	AzureADAuth types.Bool   `tfsdk:"azure_ad_auth"`
 }
 
 func (p *MssqlProvider) Metadata(ctx context.Context, req provider.MetadataRequest, resp *provider.MetadataResponse) {
@@ -76,6 +78,10 @@ func (p *MssqlProvider) Schema(ctx context.Context, req provider.SchemaRequest, 
 					},
 				},
 			},
+			"azure_ad_auth": schema.BoolAttribute{
+				Description: "When true, Azure AD authentication will be used when connecting.",
+				Optional:    true,
+			},
 		},
 	}
 }
@@ -112,13 +118,50 @@ func (p *MssqlProvider) Configure(ctx context.Context, req provider.ConfigureReq
 		)
 	}
 
+	if data.SqlAuth == nil && !data.AzureADAuth.ValueBool() {
+		resp.Diagnostics.AddError(
+			"Missing Authentication",
+			"Either sql_auth or azure_ad_auth must be provided.",
+		)
+	}
+
+	if data.SqlAuth != nil && data.AzureADAuth.ValueBool() {
+		resp.Diagnostics.AddError(
+			"Multiple Authentication Methods",
+			"Only one authentication method (sql_auth or azure_ad_auth) can be provided.",
+		)
+	}
+
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	// Create Client Context
-	client := &core.ProviderData{
-		Client: mssql.NewClient(data.Host.ValueString(), data.Port.ValueInt64(), data.Database.ValueString(), data.SqlAuth.Username.ValueString(), data.SqlAuth.Password.ValueString()),
+	// Create Client Context.
+	var client *core.ProviderData
+	if data.SqlAuth != nil {
+		client = &core.ProviderData{
+			Client: mssql.NewClient(data.Host.ValueString(), data.Port.ValueInt64(), data.Database.ValueString(), data.SqlAuth.Username.ValueString(), data.SqlAuth.Password.ValueString()),
+		}
+	} else if data.AzureADAuth.ValueBool() {
+		var sqlClient mssql.SqlClient
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					resp.Diagnostics.AddError("Failed to create Azure AD client", fmt.Sprintf("%v", r))
+				}
+			}()
+			var err error
+			sqlClient, err = mssql.NewAzureADClient(data.Host.ValueString(), data.Port.ValueInt64(), data.Database.ValueString())
+			if err != nil {
+				resp.Diagnostics.AddError("Failed to create Azure AD client", err.Error())
+			}
+		}()
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		client = &core.ProviderData{
+			Client: sqlClient,
+		}
 	}
 
 	resp.DataSourceData = client
