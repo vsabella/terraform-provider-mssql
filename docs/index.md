@@ -29,11 +29,11 @@ provider "mssql" {}
 
 ### Required
 
-- `database` (String) Database to connect to.
 - `host` (String) MSSQL Server Hostname
 
 ### Optional
 
+- `database` (String) Database to connect to. Default: `master`
 - `port` (Number) MSSQL Server Port. Default: `1433`
 - `sql_auth` (Attributes) When provided, SQL authentication will be used when connecting. (see [below for nested schema](#nestedatt--sql_auth))
 
