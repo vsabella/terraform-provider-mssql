@@ -17,6 +17,9 @@ type SqlClient interface {
 	CreateRole(ctx context.Context, name string) (Role, error)
 	UpdateRole(ctx context.Context, role Role) (Role, error)
 	DeleteRole(ctx context.Context, name string) error
+	GetDatabase(ctx context.Context, id string) (Database, error)
+	CreateDatabase(ctx context.Context, name string) (Database, error)
+	DeleteDatabase(ctx context.Context, id string) error
 }
 
 type User struct {
@@ -55,6 +58,11 @@ type DatabaseGrantPermission struct {
 }
 
 type Role struct {
+	Id   string
+	Name string
+}
+
+type Database struct {
 	Id   string
 	Name string
 }

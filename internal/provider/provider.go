@@ -58,8 +58,8 @@ func (p *MssqlProvider) Schema(ctx context.Context, req provider.SchemaRequest, 
 				Optional:            true,
 			},
 			"database": schema.StringAttribute{
-				MarkdownDescription: "Database to connect to.",
-				Required:            true,
+				MarkdownDescription: "Database to connect to. Default: `master`",
+				Optional:            true,
 			},
 			"sql_auth": schema.SingleNestedAttribute{
 				Description: "When provided, SQL authentication will be used when connecting.",
@@ -98,18 +98,19 @@ func (p *MssqlProvider) Configure(ctx context.Context, req provider.ConfigureReq
 
 	if data.Port.IsUnknown() {
 		resp.Diagnostics.AddAttributeError(
-			path.Root("host"),
-			"Unknown Sql Server Server Port",
+			path.Root("port"),
+			"Unknown Sql Server Port",
 			"The provider needs the port of Microsoft SQL Server.",
 		)
 	}
 
 	if data.Database.IsUnknown() || data.Database.IsNull() || data.Database.ValueString() == "" {
-		resp.Diagnostics.AddAttributeError(
-			path.Root("host"),
-			"Unknown Sql Server Database",
-			"The provider is designed for Contained Databases / Azure SQL and will only connect to a single database at a time.",
+		resp.Diagnostics.AddAttributeWarning(
+			path.Root("database"),
+			"Unknown Sql Server Database, defaulting to 'master'",
+			"The provider is designed for Contained Databases and will only connect to a single database at a time. If not provided, the provider will default to 'master'.",
 		)
+		data.Database = types.StringValue("master")
 	}
 
 	if resp.Diagnostics.HasError() {
@@ -131,6 +132,7 @@ func (p *MssqlProvider) Resources(ctx context.Context) []func() resource.Resourc
 		NewMssqlRoleResource,
 		NewMssqlRoleAssignmentResource,
 		NewMssqlGrantResource,
+		NewMssqlDatabaseResource,
 	}
 }
 
