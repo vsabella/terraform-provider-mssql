@@ -21,4 +21,4 @@ MssqlDatabase resource
 
 ### Read-Only
 
-- `id` (String) Database ID. Can be retrieved using `SELECT DB_ID('<db_name>')`.
+- `id` (Number) Database ID. Can be retrieved using `SELECT DB_ID('<db_name>')`.
