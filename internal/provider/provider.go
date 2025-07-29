@@ -105,9 +105,8 @@ func (p *MssqlProvider) Configure(ctx context.Context, req provider.ConfigureReq
 	}
 
 	if data.Database.IsUnknown() || data.Database.IsNull() || data.Database.ValueString() == "" {
-		resp.Diagnostics.AddAttributeWarning(
-			path.Root("database"),
-			"Unknown Sql Server Database, defaulting to 'master'",
+		resp.Diagnostics.AddWarning(
+			"Unknown Sql Server Database, defaults to 'master'",
 			"The provider is designed for Contained Databases and will only connect to a single database at a time. If not provided, the provider will default to 'master'.",
 		)
 		data.Database = types.StringValue("master")

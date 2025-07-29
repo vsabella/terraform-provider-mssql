@@ -380,15 +380,20 @@ func (m client) DeleteRole(ctx context.Context, name string) error {
 }
 
 func (m client) GetDatabase(ctx context.Context, name string) (Database, error) {
-	db := Database{
-		Id:   name,
-		Name: name,
-	}
-
-	cmd := `SELECT [name] FROM sys.databases WHERE [name] = @name`
+	var db Database
+	cmd := `SELECT [name], [database_id] FROM sys.databases WHERE [name] = @name`
 	tflog.Debug(ctx, fmt.Sprintf("Executing refresh query for database %s: command %s", name, cmd))
 	result := m.conn.QueryRowContext(ctx, cmd, sql.Named("name", name))
-	err := result.Scan(&db.Name)
+	err := result.Scan(&db.Name, &db.Id)
+	return db, err
+}
+
+func (m client) GetDatabaseById(ctx context.Context, id int64) (Database, error) {
+	var db Database
+	cmd := `SELECT [name], [database_id] FROM sys.databases WHERE [database_id] = @id`
+	tflog.Debug(ctx, fmt.Sprintf("Executing refresh query for database %d: command %s", id, cmd))
+	result := m.conn.QueryRowContext(ctx, cmd, sql.Named("id", id))
+	err := result.Scan(&db.Name, &db.Id)
 	return db, err
 }
 
@@ -401,12 +406,4 @@ func (m client) CreateDatabase(ctx context.Context, name string) (Database, erro
 	}
 	db, err = m.GetDatabase(ctx, name)
 	return db, err
-}
-
-func (m client) DeleteDatabase(ctx context.Context, name string) error {
-	query := fmt.Sprintf("DROP DATABASE [%s]", name)
-	tflog.Debug(ctx, fmt.Sprintf("Deleting Database %s: cmd: %s", name, query))
-	_, err := m.conn.ExecContext(ctx, query)
-
-	return err
 }
