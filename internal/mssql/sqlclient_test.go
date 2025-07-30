@@ -1,8 +1,10 @@
 package mssql
 
 import (
+	"context"
 	"database/sql"
 	"errors"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -103,6 +105,50 @@ func Test_buildCreateUser(t *testing.T) {
 			}
 			if !reflect.DeepEqual(got1, tt.want1) {
 				t.Errorf("buildCreateUser() got1 = %v, want %v", got1, tt.want1)
+			}
+		})
+	}
+}
+
+func Test_CreateDatabase(t *testing.T) {
+	type args struct {
+		name string
+	}
+	tests := []struct {
+		name    string
+		args    args
+		wantErr bool
+	}{
+		{
+			name:    "Create valid database",
+			args:    args{name: "testdb2"},
+			wantErr: false,
+		},
+		{
+			name:    "Create existing database",
+			args:    args{name: "testdb2"},
+			wantErr: true,
+		},
+		{
+			name:    "Create database with invalid name",
+			args:    args{name: ""},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			password := os.Getenv("MSSQL_SA_PASSWORD")
+			if password == "" {
+				t.Fatalf("MSSQL_SA_PASSWORD environment variable is not set")
+			}
+			client := NewClient("localhost", 1433, "master", "sa", password)
+			db, err := client.CreateDatabase(context.Background(), tt.args.name)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("CreateDatabase() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if !tt.wantErr {
+				t.Logf("Created database %s (id %d)", db.Name, db.Id)
 			}
 		})
 	}

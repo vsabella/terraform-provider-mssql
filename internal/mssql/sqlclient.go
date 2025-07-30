@@ -378,3 +378,32 @@ func (m client) DeleteRole(ctx context.Context, name string) error {
 
 	return err
 }
+
+func (m client) GetDatabase(ctx context.Context, name string) (Database, error) {
+	var db Database
+	cmd := `SELECT [name], [database_id] FROM sys.databases WHERE [name] = @name`
+	tflog.Debug(ctx, fmt.Sprintf("Executing refresh query for database %s: command %s", name, cmd))
+	result := m.conn.QueryRowContext(ctx, cmd, sql.Named("name", name))
+	err := result.Scan(&db.Name, &db.Id)
+	return db, err
+}
+
+func (m client) GetDatabaseById(ctx context.Context, id int64) (Database, error) {
+	var db Database
+	cmd := `SELECT [name], [database_id] FROM sys.databases WHERE [database_id] = @id`
+	tflog.Debug(ctx, fmt.Sprintf("Executing refresh query for database %d: command %s", id, cmd))
+	result := m.conn.QueryRowContext(ctx, cmd, sql.Named("id", id))
+	err := result.Scan(&db.Name, &db.Id)
+	return db, err
+}
+
+func (m client) CreateDatabase(ctx context.Context, name string) (Database, error) {
+	var db Database
+	query := fmt.Sprintf("CREATE DATABASE [%s]", name)
+	_, err := m.conn.ExecContext(ctx, query)
+	if err != nil {
+		return db, fmt.Errorf("failed to create database: %v", err)
+	}
+	db, err = m.GetDatabase(ctx, name)
+	return db, err
+}

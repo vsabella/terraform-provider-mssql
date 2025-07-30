@@ -1,6 +1,8 @@
 package mssql
 
-import "context"
+import (
+	"context"
+)
 
 type SqlClient interface {
 	GetUser(ctx context.Context, username string) (User, error)
@@ -17,6 +19,9 @@ type SqlClient interface {
 	CreateRole(ctx context.Context, name string) (Role, error)
 	UpdateRole(ctx context.Context, role Role) (Role, error)
 	DeleteRole(ctx context.Context, name string) error
+	GetDatabase(ctx context.Context, name string) (Database, error)
+	GetDatabaseById(ctx context.Context, id int64) (Database, error)
+	CreateDatabase(ctx context.Context, name string) (Database, error)
 }
 
 type User struct {
@@ -56,5 +61,10 @@ type DatabaseGrantPermission struct {
 
 type Role struct {
 	Id   string
+	Name string
+}
+
+type Database struct {
+	Id   int64
 	Name string
 }
