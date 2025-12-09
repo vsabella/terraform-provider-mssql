@@ -7,14 +7,16 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	"github.com/vsabella/terraform-provider-mssql/internal/core"
+	"github.com/vsabella/terraform-provider-mssql/internal/mssql"
 )
 
 // Ensure provider defined types fully satisfy framework interfaces.
@@ -31,8 +33,26 @@ type MssqlDatabaseResource struct {
 }
 
 type MssqlDatabaseResourceModel struct {
-	Id   types.Int64  `tfsdk:"id"`
-	Name types.String `tfsdk:"name"`
+	Id                          types.String `tfsdk:"id"`
+	Name                        types.String `tfsdk:"name"`
+	Collation                   types.String `tfsdk:"collation"`
+	CompatibilityLevel          types.Int64  `tfsdk:"compatibility_level"`
+	RecoveryModel               types.String `tfsdk:"recovery_model"`
+	ReadCommittedSnapshot       types.Bool   `tfsdk:"read_committed_snapshot"`
+	AllowSnapshotIsolation      types.Bool   `tfsdk:"allow_snapshot_isolation"`
+	AcceleratedDatabaseRecovery types.Bool   `tfsdk:"accelerated_database_recovery"`
+	AutoClose                   types.Bool   `tfsdk:"auto_close"`
+	AutoShrink                  types.Bool   `tfsdk:"auto_shrink"`
+	AutoCreateStats             types.Bool   `tfsdk:"auto_create_stats"`
+	AutoUpdateStats             types.Bool   `tfsdk:"auto_update_stats"`
+	AutoUpdateStatsAsync        types.Bool   `tfsdk:"auto_update_stats_async"`
+	ScopedConfigurations        types.Set    `tfsdk:"scoped_configuration"`
+}
+
+type ScopedConfigurationModel struct {
+	Name              types.String `tfsdk:"name"`
+	Value             types.String `tfsdk:"value"`
+	ValueForSecondary types.String `tfsdk:"value_for_secondary"`
 }
 
 func (r *MssqlDatabaseResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -41,26 +61,104 @@ func (r *MssqlDatabaseResource) Metadata(ctx context.Context, req resource.Metad
 
 func (r *MssqlDatabaseResource) Schema(ctx context.Context, req resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "MssqlDatabase resource",
+		MarkdownDescription: "Manages a SQL Server database including engine options and scoped configurations. The resource ID is the database name, making it resilient to RDS Multi-AZ failovers.",
 
 		Attributes: map[string]schema.Attribute{
-			"id": schema.Int64Attribute{
-				MarkdownDescription: "Database ID. Can be retrieved using `SELECT DB_ID('<db_name>')`.",
+			"id": schema.StringAttribute{
+				MarkdownDescription: "Database name (used as resource identifier). This is the same as `name` and is used for lookups, ensuring stability across RDS failovers.",
 				Computed:            true,
-				PlanModifiers: []planmodifier.Int64{
-					int64planmodifier.UseStateForUnknown(),
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
 			"name": schema.StringAttribute{
-				MarkdownDescription: "Database name.",
+				MarkdownDescription: "Database name. Changing this forces a new resource to be created.",
 				Required:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
+			},
+			"collation": schema.StringAttribute{
+				MarkdownDescription: "Database collation. If not specified, uses the server default collation.",
+				Optional:            true,
+				Computed:            true,
+			},
+			"compatibility_level": schema.Int64Attribute{
+				MarkdownDescription: "Database compatibility level (e.g., 150 for SQL Server 2019, 160 for SQL Server 2022). If not specified, the existing setting is preserved.",
+				Optional:            true,
+				Computed:            true,
+			},
+			"recovery_model": schema.StringAttribute{
+				MarkdownDescription: "Recovery model: FULL, BULK_LOGGED, or SIMPLE. If not specified, the existing setting is preserved.",
+				Optional:            true,
+				Computed:            true,
+			},
+			"read_committed_snapshot": schema.BoolAttribute{
+				MarkdownDescription: "Enable READ_COMMITTED_SNAPSHOT isolation. If not specified, the existing database setting is preserved.",
+				Optional:            true,
+				Computed:            true,
+			},
+			"allow_snapshot_isolation": schema.BoolAttribute{
+				MarkdownDescription: "Allow SNAPSHOT isolation level. If not specified, the existing database setting is preserved.",
+				Optional:            true,
+				Computed:            true,
+			},
+			"accelerated_database_recovery": schema.BoolAttribute{
+				MarkdownDescription: "Enable Accelerated Database Recovery (ADR). Available in SQL Server 2019+ and Azure SQL. If not specified, the existing database setting is preserved.",
+				Optional:            true,
+				Computed:            true,
+			},
+			"auto_close": schema.BoolAttribute{
+				MarkdownDescription: "Automatically close the database when the last user exits. If not specified, the existing database setting is preserved.",
+				Optional:            true,
+				Computed:            true,
+			},
+			"auto_shrink": schema.BoolAttribute{
+				MarkdownDescription: "Automatically shrink the database files. Not recommended for production. If not specified, the existing database setting is preserved.",
+				Optional:            true,
+				Computed:            true,
+			},
+			"auto_create_stats": schema.BoolAttribute{
+				MarkdownDescription: "Automatically create statistics on columns. If not specified, the existing database setting is preserved.",
+				Optional:            true,
+				Computed:            true,
+			},
+			"auto_update_stats": schema.BoolAttribute{
+				MarkdownDescription: "Automatically update statistics. If not specified, the existing database setting is preserved.",
+				Optional:            true,
+				Computed:            true,
+			},
+			"auto_update_stats_async": schema.BoolAttribute{
+				MarkdownDescription: "Update statistics asynchronously. If not specified, the existing database setting is preserved.",
+				Optional:            true,
+				Computed:            true,
+			},
+		},
+		Blocks: map[string]schema.Block{
+			"scoped_configuration": schema.SetNestedBlock{
+				MarkdownDescription: "Database scoped configuration settings (ALTER DATABASE SCOPED CONFIGURATION).",
+				NestedObject: schema.NestedBlockObject{
+					Attributes: map[string]schema.Attribute{
+						"name": schema.StringAttribute{
+							MarkdownDescription: "Configuration name (e.g., MAXDOP, LEGACY_CARDINALITY_ESTIMATION).",
+							Required:            true,
+						},
+						"value": schema.StringAttribute{
+							MarkdownDescription: "Configuration value.",
+							Required:            true,
+						},
+						"value_for_secondary": schema.StringAttribute{
+							MarkdownDescription: "Configuration value for secondary replicas (optional).",
+							Optional:            true,
+						},
+					},
+				},
 			},
 		},
 	}
 }
 
 func (r *MssqlDatabaseResource) Configure(ctx context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
-	// Prevent panic if the provider has not been configured.
 	if req.ProviderData == nil {
 		return
 	}
@@ -69,9 +167,8 @@ func (r *MssqlDatabaseResource) Configure(ctx context.Context, req resource.Conf
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected Resource Configure Type",
-			fmt.Sprintf("Expected *core.SqlClient, got: %T. Please report this issue to the provider developers.", req.ProviderData),
+			fmt.Sprintf("Expected *core.ProviderData, got: %T. Please report this issue to the provider developers.", req.ProviderData),
 		)
-
 		return
 	}
 
@@ -84,48 +181,69 @@ func (r *MssqlDatabaseResource) Create(ctx context.Context, req resource.CreateR
 
 	var data MssqlDatabaseResourceModel
 
-	// Read Terraform plan data into the model
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
-
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	db, err := r.ctx.Client.CreateDatabase(ctx, data.Name.ValueString())
+	// Create the database
+	_, err := r.ctx.Client.CreateDatabase(ctx, data.Name.ValueString(), data.Collation.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError(fmt.Sprintf("Error creating database %s", data.Name.ValueString()), err.Error())
 		return
 	}
 
-	data.Id = types.Int64Value(db.Id)
-	tflog.Debug(ctx, fmt.Sprintf("Created database %s with id %d", data.Name.ValueString(), data.Id.ValueInt64()))
+	data.Id = types.StringValue(data.Name.ValueString())
+	tflog.Debug(ctx, fmt.Sprintf("Created database %s", data.Name.ValueString()))
 
-	// Save data into Terraform state
+	// Apply database options if any are set
+	if err := r.applyDatabaseOptions(ctx, &data); err != nil {
+		resp.Diagnostics.AddError("Error applying database options", err.Error())
+		return
+	}
+
+	// Apply scoped configurations (fail-fast to avoid silent drift). No prior managed set on create.
+	if err := r.applyScopedConfigurations(ctx, &data, nil); err != nil {
+		resp.Diagnostics.AddError("Error applying scoped configurations", err.Error())
+		return
+	}
+
+	// Read back the current state to get computed values
+	if err := r.refreshDatabaseState(ctx, &data); err != nil {
+		resp.Diagnostics.AddWarning("Error refreshing database state", err.Error())
+	}
+
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
 func (r *MssqlDatabaseResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
 	var state MssqlDatabaseResourceModel
 
-	// Read Terraform prior state data into the model
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	db, err := r.ctx.Client.GetDatabaseById(ctx, state.Id.ValueInt64())
+	dbName := state.Id.ValueString()
+	db, err := r.ctx.Client.GetDatabase(ctx, dbName)
 
-	// If resource is not found, remove it from the state
 	if errors.Is(err, sql.ErrNoRows) {
-		resp.Diagnostics.AddWarning("Database not found, removing from state", fmt.Sprintf("Database %s (id: %d) not found, removing from state", state.Name.ValueString(), state.Id.ValueInt64()))
+		resp.Diagnostics.AddWarning("Database not found, removing from state", fmt.Sprintf("Database %s not found, removing from state", dbName))
 		resp.State.RemoveResource(ctx)
 		return
 	} else if err != nil {
-		resp.Diagnostics.AddError("Unable to read database", fmt.Sprintf("Unable to read database %s (id: %d). Error: %s", state.Name.ValueString(), state.Id.ValueInt64(), err))
+		resp.Diagnostics.AddError("Unable to read database", fmt.Sprintf("Unable to read database %s. Error: %s", dbName, err))
 		return
 	}
 
-	state.Id = types.Int64Value(db.Id)
+	state.Id = types.StringValue(db.Name)
+	state.Name = types.StringValue(db.Name)
+
+	// Refresh options and scoped configurations
+	if err := r.refreshDatabaseState(ctx, &state); err != nil {
+		resp.Diagnostics.AddWarning("Error refreshing database state", err.Error())
+	}
+
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
@@ -141,13 +259,36 @@ func (r *MssqlDatabaseResource) Update(ctx context.Context, req resource.UpdateR
 		return
 	}
 
-	// we don't support updating database name as there should not be any reason to do so.
 	if plan.Name.ValueString() != state.Name.ValueString() {
 		resp.Diagnostics.AddError("Unable to update database", fmt.Sprintf("Updating database name is not supported. Database name cannot be changed from %s to %s.", state.Name.ValueString(), plan.Name.ValueString()))
 		return
 	}
 
-	// nothing changed, save data into Terraform state
+	var priorConfigs []ScopedConfigurationModel
+	if !state.ScopedConfigurations.IsNull() && !state.ScopedConfigurations.IsUnknown() {
+		if diags := state.ScopedConfigurations.ElementsAs(ctx, &priorConfigs, false); diags.HasError() {
+			resp.Diagnostics.Append(diags...)
+			return
+		}
+	}
+
+	// Apply database options
+	if err := r.applyDatabaseOptions(ctx, &plan); err != nil {
+		resp.Diagnostics.AddError("Error applying database options", err.Error())
+		return
+	}
+
+	// Apply scoped configurations (fail-fast to avoid silent drift)
+	if err := r.applyScopedConfigurations(ctx, &plan, priorConfigs); err != nil {
+		resp.Diagnostics.AddError("Error applying scoped configurations", err.Error())
+		return
+	}
+
+	// Refresh state to get current values
+	if err := r.refreshDatabaseState(ctx, &plan); err != nil {
+		resp.Diagnostics.AddWarning("Error refreshing database state", err.Error())
+	}
+
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -157,19 +298,288 @@ func (r *MssqlDatabaseResource) Delete(ctx context.Context, req resource.DeleteR
 
 	var data MssqlDatabaseResourceModel
 
-	// Read Terraform prior state data into the model
 	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	// we don't support deleting database, otherwise, an unintentional deletion of a database could happen.
-	resp.Diagnostics.AddError("Unable to delete database", fmt.Sprintf("Deleting a database is not supported. Database %s (id: %d) will not be deleted, contact the database administrator for this operation.", data.Name.ValueString(), data.Id.ValueInt64()))
-
-	// nothing changed, recover the state back to the original state
-	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
+	tflog.Warn(ctx, fmt.Sprintf("Database %s will not be deleted. Terraform will remove it from state but the database will remain on the server.", data.Name.ValueString()))
+	resp.Diagnostics.AddWarning(
+		"Database not deleted",
+		fmt.Sprintf("Database %s was not dropped. The resource is removed from state but the database remains on the server.", data.Name.ValueString()),
+	)
 }
 
 func (r *MssqlDatabaseResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+	dbName := req.ID
+
+	db, err := r.ctx.Client.GetDatabase(ctx, dbName)
+	if err != nil {
+		resp.Diagnostics.AddError("Unable to import database", fmt.Sprintf("Database %s not found or error occurred: %s", dbName, err))
+		return
+	}
+
+	// Import scoped configurations (populate state so Terraform can manage/clear them)
+	configObjectType := types.ObjectType{
+		AttrTypes: map[string]attr.Type{
+			"name":                types.StringType,
+			"value":               types.StringType,
+			"value_for_secondary": types.StringType,
+		},
+	}
+	if configs, cfgErr := r.ctx.Client.GetDatabaseScopedConfigurations(ctx, db.Name); cfgErr == nil {
+		var values []attr.Value
+		for _, cfg := range configs {
+			attrs := map[string]attr.Value{
+				"name":  types.StringValue(cfg.Name),
+				"value": types.StringValue(cfg.Value),
+			}
+			if cfg.ValueForSecondary != "" {
+				attrs["value_for_secondary"] = types.StringValue(cfg.ValueForSecondary)
+			} else {
+				attrs["value_for_secondary"] = types.StringNull()
+			}
+			obj, objDiags := types.ObjectValue(configObjectType.AttrTypes, attrs)
+			if objDiags.HasError() {
+				resp.Diagnostics.Append(objDiags...)
+				return
+			}
+			values = append(values, obj)
+		}
+		setVal, setDiags := types.SetValue(configObjectType, values)
+		if setDiags.HasError() {
+			resp.Diagnostics.Append(setDiags...)
+			return
+		}
+		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("scoped_configuration"), setVal)...)
+	}
+
+	// Set basic attributes
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), db.Name)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("name"), db.Name)...)
+
+	// Get database options
+	opts, err := r.ctx.Client.GetDatabaseOptions(ctx, db.Name)
+	if err == nil {
+		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("collation"), opts.Collation)...)
+		if opts.CompatibilityLevel != nil {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("compatibility_level"), int64(*opts.CompatibilityLevel))...)
+		} else {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("compatibility_level"), types.Int64Null())...)
+		}
+		if opts.RecoveryModel != nil {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("recovery_model"), *opts.RecoveryModel)...)
+		} else {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("recovery_model"), types.StringNull())...)
+		}
+		if opts.ReadCommittedSnapshot != nil {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("read_committed_snapshot"), *opts.ReadCommittedSnapshot)...)
+		} else {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("read_committed_snapshot"), types.BoolNull())...)
+		}
+		if opts.AllowSnapshotIsolation != nil {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("allow_snapshot_isolation"), *opts.AllowSnapshotIsolation)...)
+		} else {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("allow_snapshot_isolation"), types.BoolNull())...)
+		}
+		if opts.AcceleratedDatabaseRecovery != nil {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("accelerated_database_recovery"), *opts.AcceleratedDatabaseRecovery)...)
+		} else {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("accelerated_database_recovery"), types.BoolNull())...)
+		}
+		if opts.AutoClose != nil {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("auto_close"), *opts.AutoClose)...)
+		} else {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("auto_close"), types.BoolNull())...)
+		}
+		if opts.AutoShrink != nil {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("auto_shrink"), *opts.AutoShrink)...)
+		} else {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("auto_shrink"), types.BoolNull())...)
+		}
+		if opts.AutoCreateStats != nil {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("auto_create_stats"), *opts.AutoCreateStats)...)
+		} else {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("auto_create_stats"), types.BoolNull())...)
+		}
+		if opts.AutoUpdateStats != nil {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("auto_update_stats"), *opts.AutoUpdateStats)...)
+		} else {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("auto_update_stats"), types.BoolNull())...)
+		}
+		if opts.AutoUpdateStatsAsync != nil {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("auto_update_stats_async"), *opts.AutoUpdateStatsAsync)...)
+		} else {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("auto_update_stats_async"), types.BoolNull())...)
+		}
+	}
+}
+
+func (r *MssqlDatabaseResource) applyDatabaseOptions(ctx context.Context, data *MssqlDatabaseResourceModel) error {
+	tflog.Info(ctx, fmt.Sprintf("applyDatabaseOptions: allow_snapshot_isolation null=%t unknown=%t value=%v", data.AllowSnapshotIsolation.IsNull(), data.AllowSnapshotIsolation.IsUnknown(), data.AllowSnapshotIsolation.ValueBool()))
+	tflog.Info(ctx, fmt.Sprintf("applyDatabaseOptions: read_committed_snapshot null=%t unknown=%t value=%v", data.ReadCommittedSnapshot.IsNull(), data.ReadCommittedSnapshot.IsUnknown(), data.ReadCommittedSnapshot.ValueBool()))
+	opts := mssql.DatabaseOptions{
+		Collation: data.Collation.ValueString(),
+	}
+
+	if !data.CompatibilityLevel.IsNull() && !data.CompatibilityLevel.IsUnknown() {
+		v := int(data.CompatibilityLevel.ValueInt64())
+		opts.CompatibilityLevel = &v
+	}
+	if !data.RecoveryModel.IsNull() && !data.RecoveryModel.IsUnknown() {
+		v := data.RecoveryModel.ValueString()
+		opts.RecoveryModel = &v
+	}
+
+	// Only set boolean options if they are explicitly configured (not null/unknown)
+	if !data.ReadCommittedSnapshot.IsNull() && !data.ReadCommittedSnapshot.IsUnknown() {
+		v := data.ReadCommittedSnapshot.ValueBool()
+		opts.ReadCommittedSnapshot = &v
+	}
+	if !data.AllowSnapshotIsolation.IsNull() && !data.AllowSnapshotIsolation.IsUnknown() {
+		v := data.AllowSnapshotIsolation.ValueBool()
+		opts.AllowSnapshotIsolation = &v
+	}
+	if !data.AcceleratedDatabaseRecovery.IsNull() && !data.AcceleratedDatabaseRecovery.IsUnknown() {
+		v := data.AcceleratedDatabaseRecovery.ValueBool()
+		opts.AcceleratedDatabaseRecovery = &v
+	}
+	if !data.AutoClose.IsNull() && !data.AutoClose.IsUnknown() {
+		v := data.AutoClose.ValueBool()
+		opts.AutoClose = &v
+	}
+	if !data.AutoShrink.IsNull() && !data.AutoShrink.IsUnknown() {
+		v := data.AutoShrink.ValueBool()
+		opts.AutoShrink = &v
+	}
+	if !data.AutoCreateStats.IsNull() && !data.AutoCreateStats.IsUnknown() {
+		v := data.AutoCreateStats.ValueBool()
+		opts.AutoCreateStats = &v
+	}
+	if !data.AutoUpdateStats.IsNull() && !data.AutoUpdateStats.IsUnknown() {
+		v := data.AutoUpdateStats.ValueBool()
+		opts.AutoUpdateStats = &v
+	}
+	if !data.AutoUpdateStatsAsync.IsNull() && !data.AutoUpdateStatsAsync.IsUnknown() {
+		v := data.AutoUpdateStatsAsync.ValueBool()
+		opts.AutoUpdateStatsAsync = &v
+	}
+
+	return r.ctx.Client.SetDatabaseOptions(ctx, data.Name.ValueString(), opts)
+}
+
+// applyScopedConfigurations applies desired configs and clears only those previously managed but now absent.
+func (r *MssqlDatabaseResource) applyScopedConfigurations(ctx context.Context, data *MssqlDatabaseResourceModel, previouslyManaged []ScopedConfigurationModel) error {
+	// Treat null/unknown as "do not manage"
+	if data.ScopedConfigurations.IsNull() || data.ScopedConfigurations.IsUnknown() {
+		return nil
+	}
+
+	var configs []ScopedConfigurationModel
+	diags := data.ScopedConfigurations.ElementsAs(ctx, &configs, false)
+	if diags.HasError() {
+		return fmt.Errorf("error reading scoped configurations")
+	}
+
+	desired := make(map[string]mssql.DatabaseScopedConfiguration)
+	for _, cfg := range configs {
+		desired[cfg.Name.ValueString()] = mssql.DatabaseScopedConfiguration{
+			Name:              cfg.Name.ValueString(),
+			Value:             cfg.Value.ValueString(),
+			ValueForSecondary: cfg.ValueForSecondary.ValueString(),
+		}
+	}
+
+	// Track which configs were previously managed so we only clear those.
+	managedNames := make(map[string]struct{})
+	for _, cfg := range previouslyManaged {
+		managedNames[cfg.Name.ValueString()] = struct{}{}
+	}
+
+	// Fetch existing configurations to detect removals of managed entries only
+	if len(managedNames) > 0 {
+		existing, err := r.ctx.Client.GetDatabaseScopedConfigurations(ctx, data.Name.ValueString())
+		if err != nil {
+			return err
+		}
+		for _, cur := range existing {
+			if _, wasManaged := managedNames[cur.Name]; wasManaged {
+				if _, stillDesired := desired[cur.Name]; !stillDesired {
+					if err := r.ctx.Client.ClearDatabaseScopedConfiguration(ctx, data.Name.ValueString(), cur.Name); err != nil {
+						return fmt.Errorf("failed to clear scoped configuration %s: %w", cur.Name, err)
+					}
+				}
+			}
+		}
+	}
+
+	// Apply desired configurations
+	for _, cfg := range desired {
+		if err := r.ctx.Client.SetDatabaseScopedConfiguration(ctx, data.Name.ValueString(), cfg); err != nil {
+			return fmt.Errorf("failed to set scoped configuration %s: %w", cfg.Name, err)
+		}
+	}
+
+	return nil
+}
+
+func (r *MssqlDatabaseResource) refreshDatabaseState(ctx context.Context, data *MssqlDatabaseResourceModel) error {
+	opts, err := r.ctx.Client.GetDatabaseOptions(ctx, data.Name.ValueString())
+	if err != nil {
+		return err
+	}
+
+	data.Collation = types.StringValue(opts.Collation)
+	if opts.CompatibilityLevel != nil {
+		data.CompatibilityLevel = types.Int64Value(int64(*opts.CompatibilityLevel))
+	} else {
+		data.CompatibilityLevel = types.Int64Null()
+	}
+	if opts.RecoveryModel != nil {
+		data.RecoveryModel = types.StringValue(*opts.RecoveryModel)
+	} else {
+		data.RecoveryModel = types.StringNull()
+	}
+
+	// Dereference pointer values for boolean options
+	if opts.ReadCommittedSnapshot != nil {
+		data.ReadCommittedSnapshot = types.BoolValue(*opts.ReadCommittedSnapshot)
+	}
+	if opts.AllowSnapshotIsolation != nil {
+		data.AllowSnapshotIsolation = types.BoolValue(*opts.AllowSnapshotIsolation)
+	}
+	if opts.AcceleratedDatabaseRecovery != nil {
+		data.AcceleratedDatabaseRecovery = types.BoolValue(*opts.AcceleratedDatabaseRecovery)
+	}
+	if opts.AutoClose != nil {
+		data.AutoClose = types.BoolValue(*opts.AutoClose)
+	}
+	if opts.AutoShrink != nil {
+		data.AutoShrink = types.BoolValue(*opts.AutoShrink)
+	}
+	if opts.AutoCreateStats != nil {
+		data.AutoCreateStats = types.BoolValue(*opts.AutoCreateStats)
+	}
+	if opts.AutoUpdateStats != nil {
+		data.AutoUpdateStats = types.BoolValue(*opts.AutoUpdateStats)
+	}
+	if opts.AutoUpdateStatsAsync != nil {
+		data.AutoUpdateStatsAsync = types.BoolValue(*opts.AutoUpdateStatsAsync)
+	}
+
+	// Note: We don't refresh scoped_configurations from the server to avoid
+	// overwriting user's intended configuration with all server settings.
+	// The user-specified configurations are treated as the source of truth.
+	// If scoped_configuration is null/unknown, set it to an empty set
+	if data.ScopedConfigurations.IsNull() || data.ScopedConfigurations.IsUnknown() {
+		data.ScopedConfigurations = types.SetNull(types.ObjectType{
+			AttrTypes: map[string]attr.Type{
+				"name":                types.StringType,
+				"value":               types.StringType,
+				"value_for_secondary": types.StringType,
+			},
+		})
+	}
+
+	return nil
 }

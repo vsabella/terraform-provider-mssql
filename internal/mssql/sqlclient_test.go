@@ -90,6 +90,43 @@ func Test_buildCreateUser(t *testing.T) {
 			}},
 			want2: errors.New("invalid user user, external users must not have a SID"),
 		},
+		{
+			name: "User with Login",
+			args: args{CreateUser{
+				Username:      "app_user",
+				LoginName:     "app_login",
+				Password:      "",
+				Sid:           "",
+				External:      false,
+				DefaultSchema: "dbo",
+			}},
+			want:  `DECLARE @sql NVARCHAR(max);SET @sql = 'CREATE USER ' + QUOTENAME(@username) + ' FOR LOGIN ' + QUOTENAME(@login_name) + 'WITH ' + 'DEFAULT_SCHEMA = ' + QUOTENAME(@default_schema);EXEC (@sql);`,
+			want1: []any{sql.Named("username", "app_user"), sql.Named("login_name", "app_login"), sql.Named("default_schema", "dbo")},
+		},
+		{
+			name: "Error Login and Password",
+			args: args{CreateUser{
+				Username:      "user",
+				LoginName:     "login",
+				Password:      "password",
+				Sid:           "",
+				External:      false,
+				DefaultSchema: "dbo",
+			}},
+			want2: errors.New("invalid user user, login-based users may not have passwords (password is on the login)"),
+		},
+		{
+			name: "Error Login and External",
+			args: args{CreateUser{
+				Username:      "user",
+				LoginName:     "login",
+				Password:      "",
+				Sid:           "",
+				External:      true,
+				DefaultSchema: "dbo",
+			}},
+			want2: errors.New("invalid user user, login-based users cannot be external"),
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -112,7 +149,8 @@ func Test_buildCreateUser(t *testing.T) {
 
 func Test_CreateDatabase(t *testing.T) {
 	type args struct {
-		name string
+		name      string
+		collation string
 	}
 	tests := []struct {
 		name    string
@@ -121,17 +159,17 @@ func Test_CreateDatabase(t *testing.T) {
 	}{
 		{
 			name:    "Create valid database",
-			args:    args{name: "testdb2"},
+			args:    args{name: "testdb2", collation: ""},
 			wantErr: false,
 		},
 		{
 			name:    "Create existing database",
-			args:    args{name: "testdb2"},
+			args:    args{name: "testdb2", collation: ""},
 			wantErr: true,
 		},
 		{
 			name:    "Create database with invalid name",
-			args:    args{name: ""},
+			args:    args{name: "", collation: ""},
 			wantErr: true,
 		},
 	}
@@ -143,7 +181,7 @@ func Test_CreateDatabase(t *testing.T) {
 				t.Fatalf("MSSQL_SA_PASSWORD environment variable is not set")
 			}
 			client := NewClient("localhost", 1433, "master", "sa", password)
-			db, err := client.CreateDatabase(context.Background(), tt.args.name)
+			db, err := client.CreateDatabase(context.Background(), tt.args.name, tt.args.collation)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("CreateDatabase() error = %v, wantErr %v", err, tt.wantErr)
 			}

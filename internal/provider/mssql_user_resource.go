@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -34,8 +35,10 @@ type MssqlUserResource struct {
 
 type MssqlUserResourceModel struct {
 	Id            types.String `tfsdk:"id"`
+	Database      types.String `tfsdk:"database"`
 	Username      types.String `tfsdk:"username"`
 	Password      types.String `tfsdk:"password"`
+	LoginName     types.String `tfsdk:"login_name"`
 	External      types.Bool   `tfsdk:"external"`
 	Sid           types.String `tfsdk:"sid"`
 	DefaultSchema types.String `tfsdk:"default_schema"`
@@ -47,8 +50,7 @@ func (r *MssqlUserResource) Metadata(ctx context.Context, req resource.MetadataR
 
 func (r *MssqlUserResource) Schema(ctx context.Context, req resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		// This description is used by the documentation generator and the language server.
-		MarkdownDescription: "MssqlUser resource",
+		MarkdownDescription: "Manages a SQL Server database user. Supports both contained users (with password) and login-based users (mapped to a server login).",
 
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
@@ -57,25 +59,41 @@ func (r *MssqlUserResource) Schema(ctx context.Context, req resource.SchemaReque
 					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
+			"database": schema.StringAttribute{
+				MarkdownDescription: "Target database for the user. If not specified, uses the provider's configured database. Changing this forces a new resource.",
+				Optional:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
+			},
 			"username": schema.StringAttribute{
-				MarkdownDescription: "MssqlUser configurable attribute with default value",
+				MarkdownDescription: "Database user name. Changing this forces a new resource to be created.",
 				Required:            true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
 			},
 			"password": schema.StringAttribute{
-				Required:  true,
+				Optional:  true,
 				Sensitive: true,
-				MarkdownDescription: "Password for the user account. Must follow strong password policies defined for SQL server. " +
+				MarkdownDescription: "Password for contained database users. Must follow strong password policies defined for SQL server. " +
 					"Passwords are case-sensitive, length must be 8-128 chars, can include all characters except `'` or `name`.\n\n" +
-					"~> **Note** Password will be stored in the raw state as plain-text. [Read more about sensitive data in state](https://www.terraform.io/language/state/sensitive-data).",
+					"~> **Note** Password will be stored in the raw state as plain-text. [Read more about sensitive data in state](https://www.terraform.io/language/state/sensitive-data).\n\n" +
+					"~> **Note** Either `password` or `login_name` must be specified, but not both. Use `password` for contained database users (Azure SQL) or `login_name` for traditional login-mapped users (RDS SQL Server).",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
+			"login_name": schema.StringAttribute{
+				MarkdownDescription: "Name of the server login to map this user to. Use this for traditional login-based users (e.g., RDS SQL Server). " +
+					"When set, the user is created with `CREATE USER ... FOR LOGIN ...`. Mutually exclusive with `password`.",
+				Optional: true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
+			},
 			"external": schema.BoolAttribute{
-				MarkdownDescription: "Is this an external user (like Microsoft EntraID)",
+				MarkdownDescription: "Is this an external user (like Microsoft EntraID). Mutually exclusive with `password` and `login_name`.",
 				Optional:            true,
 				Computed:            true,
 				Default:             booldefault.StaticBool(false),
@@ -84,7 +102,7 @@ func (r *MssqlUserResource) Schema(ctx context.Context, req resource.SchemaReque
 				},
 			},
 			"sid": schema.StringAttribute{
-				MarkdownDescription: "Set custom SID for the user",
+				MarkdownDescription: "Set custom SID for the user.",
 				Optional:            true,
 				Computed:            true,
 				PlanModifiers: []planmodifier.String{
@@ -93,9 +111,10 @@ func (r *MssqlUserResource) Schema(ctx context.Context, req resource.SchemaReque
 				},
 			},
 			"default_schema": schema.StringAttribute{
-				Optional: true,
-				Computed: true,
-				Default:  stringdefault.StaticString("dbo"),
+				MarkdownDescription: "Default schema for the user. Defaults to `dbo`.",
+				Optional:            true,
+				Computed:            true,
+				Default:             stringdefault.StaticString("dbo"),
 			},
 		},
 	}
@@ -130,15 +149,40 @@ func (r *MssqlUserResource) Create(ctx context.Context, req resource.CreateReque
 		return
 	}
 
+	// Validate mutually exclusive options
+	hasPassword := !data.Password.IsNull() && data.Password.ValueString() != ""
+	hasLoginName := !data.LoginName.IsNull() && data.LoginName.ValueString() != ""
+	isExternal := data.External.ValueBool()
+
+	if hasPassword && hasLoginName {
+		resp.Diagnostics.AddError("Invalid configuration",
+			"Cannot specify both 'password' and 'login_name'. Use 'password' for contained database users or 'login_name' for login-based users.")
+		return
+	}
+
+	if isExternal && (hasPassword || hasLoginName) {
+		resp.Diagnostics.AddError("Invalid configuration",
+			"External users cannot have 'password' or 'login_name' specified.")
+		return
+	}
+
+	if !hasPassword && !hasLoginName && !isExternal {
+		resp.Diagnostics.AddError("Invalid configuration",
+			"Either 'password', 'login_name', or 'external = true' must be specified.")
+		return
+	}
+
 	create := mssql.CreateUser{
 		Username:      data.Username.ValueString(),
 		Password:      data.Password.ValueString(),
+		LoginName:     data.LoginName.ValueString(),
 		Sid:           data.Sid.ValueString(),
 		External:      data.External.ValueBool(),
 		DefaultSchema: data.DefaultSchema.ValueString(),
 	}
 
-	user, err := r.ctx.Client.CreateUser(ctx, create)
+	database := data.Database.ValueString()
+	user, err := r.ctx.Client.CreateUser(ctx, database, create)
 	if err != nil {
 		resp.Diagnostics.AddError(fmt.Sprintf("Error creating user %s", create.Username), err.Error())
 		return
@@ -172,7 +216,8 @@ func (r *MssqlUserResource) Read(ctx context.Context, req resource.ReadRequest, 
 		return
 	}
 
-	user, err := r.ctx.Client.GetUser(ctx, data.Id.ValueString())
+	database := data.Database.ValueString()
+	user, err := r.ctx.Client.GetUser(ctx, database, data.Id.ValueString())
 
 	// If resource is not found, remove it from the state
 	if errors.Is(err, sql.ErrNoRows) {
@@ -202,7 +247,8 @@ func (r *MssqlUserResource) Update(ctx context.Context, req resource.UpdateReque
 		DefaultSchema: data.DefaultSchema.ValueString(),
 	}
 
-	cur, err := r.ctx.Client.UpdateUser(ctx, user)
+	database := data.Database.ValueString()
+	cur, err := r.ctx.Client.UpdateUser(ctx, database, user)
 	if err != nil {
 		resp.Diagnostics.AddError("could not update user", err.Error())
 		return
@@ -224,7 +270,8 @@ func (r *MssqlUserResource) Delete(ctx context.Context, req resource.DeleteReque
 		return
 	}
 
-	err := r.ctx.Client.DeleteUser(ctx, data.Id.ValueString())
+	database := data.Database.ValueString()
+	err := r.ctx.Client.DeleteUser(ctx, database, data.Id.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError("unable to delete user", fmt.Sprintf("unable to delete user %s, got error: %s", data.Username.ValueString(), err))
 		return
@@ -232,5 +279,17 @@ func (r *MssqlUserResource) Delete(ctx context.Context, req resource.DeleteReque
 }
 
 func (r *MssqlUserResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+	// ID format: database/username or just username (for provider's default database)
+	parts := strings.SplitN(req.ID, "/", 2)
+
+	if len(parts) == 2 {
+		// database/username format
+		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("database"), parts[0])...)
+		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("username"), parts[1])...)
+		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), parts[1])...)
+	} else {
+		// Just username - uses provider's default database
+		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("username"), req.ID)...)
+		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
+	}
 }

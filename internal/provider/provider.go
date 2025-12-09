@@ -107,9 +107,37 @@ func (p *MssqlProvider) Configure(ctx context.Context, req provider.ConfigureReq
 	if data.Database.IsUnknown() || data.Database.IsNull() || data.Database.ValueString() == "" {
 		resp.Diagnostics.AddWarning(
 			"Unknown Sql Server Database, defaults to 'master'",
-			"The provider is designed for Contained Databases and will only connect to a single database at a time. If not provided, the provider will default to 'master'.",
+			"No database specified. The provider will default to 'master'. Database-scoped resources can target other databases using the 'database' attribute.",
 		)
 		data.Database = types.StringValue("master")
+	}
+
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// Validate sql_auth if provided (currently required to connect)
+	if data.SqlAuth == nil {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("sql_auth"),
+			"Missing SQL Authentication",
+			"`sql_auth` is required. Provide `sql_auth { username = \"...\" password = \"...\" }`.",
+		)
+		return
+	}
+	if data.SqlAuth.Username.IsUnknown() || data.SqlAuth.Username.IsNull() || data.SqlAuth.Username.ValueString() == "" {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("sql_auth").AtName("username"),
+			"Missing SQL Username",
+			"`sql_auth.username` must be set.",
+		)
+	}
+	if data.SqlAuth.Password.IsUnknown() || data.SqlAuth.Password.IsNull() || data.SqlAuth.Password.ValueString() == "" {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("sql_auth").AtName("password"),
+			"Missing SQL Password",
+			"`sql_auth.password` must be set.",
+		)
 	}
 
 	if resp.Diagnostics.HasError() {
@@ -132,6 +160,8 @@ func (p *MssqlProvider) Resources(ctx context.Context) []func() resource.Resourc
 		NewMssqlRoleAssignmentResource,
 		NewMssqlGrantResource,
 		NewMssqlDatabaseResource,
+		NewMssqlLoginResource,
+		NewMssqlScriptResource,
 	}
 }
 
