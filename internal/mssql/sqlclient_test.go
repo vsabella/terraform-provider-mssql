@@ -8,6 +8,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/DATA-DOG/go-sqlmock"
 )
 
 func Test_buildCreateUser(t *testing.T) {
@@ -189,5 +191,49 @@ func Test_CreateDatabase(t *testing.T) {
 				t.Logf("Created database %s (id %d)", db.Name, db.Id)
 			}
 		})
+	}
+}
+
+func Test_SetDatabaseOptions_NoChanges(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() err = %v", err)
+	}
+	defer db.Close()
+
+	c := client{conn: db}
+	opts := DatabaseOptions{}
+
+	if err := c.SetDatabaseOptions(context.Background(), "testdb", opts); err != nil {
+		t.Fatalf("SetDatabaseOptions() unexpected err = %v", err)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func Test_SetDatabaseOptions_OnlyRCSI(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() err = %v", err)
+	}
+	defer db.Close()
+
+	c := client{conn: db}
+	rcsi := true
+	opts := DatabaseOptions{
+		ReadCommittedSnapshot: &rcsi,
+	}
+
+	mock.ExpectExec(`ALTER DATABASE \[testdb\] SET READ_COMMITTED_SNAPSHOT ON WITH ROLLBACK IMMEDIATE`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	if err := c.SetDatabaseOptions(context.Background(), "testdb", opts); err != nil {
+		t.Fatalf("SetDatabaseOptions() unexpected err = %v", err)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
 	}
 }

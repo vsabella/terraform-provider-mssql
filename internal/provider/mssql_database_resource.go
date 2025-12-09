@@ -416,53 +416,66 @@ func (r *MssqlDatabaseResource) ImportState(ctx context.Context, req resource.Im
 }
 
 func (r *MssqlDatabaseResource) applyDatabaseOptions(ctx context.Context, data *MssqlDatabaseResourceModel) error {
-	tflog.Info(ctx, fmt.Sprintf("applyDatabaseOptions: allow_snapshot_isolation null=%t unknown=%t value=%v", data.AllowSnapshotIsolation.IsNull(), data.AllowSnapshotIsolation.IsUnknown(), data.AllowSnapshotIsolation.ValueBool()))
-	tflog.Info(ctx, fmt.Sprintf("applyDatabaseOptions: read_committed_snapshot null=%t unknown=%t value=%v", data.ReadCommittedSnapshot.IsNull(), data.ReadCommittedSnapshot.IsUnknown(), data.ReadCommittedSnapshot.ValueBool()))
-	opts := mssql.DatabaseOptions{
-		Collation: data.Collation.ValueString(),
+	// Fetch current options to avoid reapplying unchanged settings (e.g., RCSI WITH ROLLBACK IMMEDIATE).
+	current, err := r.ctx.Client.GetDatabaseOptions(ctx, data.Name.ValueString())
+	if err != nil {
+		return err
 	}
 
+	opts := mssql.DatabaseOptions{}
+	hasChanges := false
+
+	// Collation (string)
+	if !data.Collation.IsNull() && !data.Collation.IsUnknown() {
+		desired := data.Collation.ValueString()
+		if desired != "" && desired != current.Collation {
+			opts.Collation = desired
+			hasChanges = true
+		}
+	}
+
+	// Compatibility level
 	if !data.CompatibilityLevel.IsNull() && !data.CompatibilityLevel.IsUnknown() {
-		v := int(data.CompatibilityLevel.ValueInt64())
-		opts.CompatibilityLevel = &v
-	}
-	if !data.RecoveryModel.IsNull() && !data.RecoveryModel.IsUnknown() {
-		v := data.RecoveryModel.ValueString()
-		opts.RecoveryModel = &v
+		desired := int(data.CompatibilityLevel.ValueInt64())
+		if current.CompatibilityLevel == nil || *current.CompatibilityLevel != desired {
+			opts.CompatibilityLevel = &desired
+			hasChanges = true
+		}
 	}
 
-	// Only set boolean options if they are explicitly configured (not null/unknown)
-	if !data.ReadCommittedSnapshot.IsNull() && !data.ReadCommittedSnapshot.IsUnknown() {
-		v := data.ReadCommittedSnapshot.ValueBool()
-		opts.ReadCommittedSnapshot = &v
+	// Recovery model
+	if !data.RecoveryModel.IsNull() && !data.RecoveryModel.IsUnknown() {
+		desired := data.RecoveryModel.ValueString()
+		if current.RecoveryModel == nil || *current.RecoveryModel != desired {
+			opts.RecoveryModel = &desired
+			hasChanges = true
+		}
 	}
-	if !data.AllowSnapshotIsolation.IsNull() && !data.AllowSnapshotIsolation.IsUnknown() {
-		v := data.AllowSnapshotIsolation.ValueBool()
-		opts.AllowSnapshotIsolation = &v
+
+	// Boolean options (apply only when explicitly set and changed)
+	compareBool := func(val types.Bool, cur *bool, setter func(v bool)) {
+		if val.IsNull() || val.IsUnknown() {
+			return
+		}
+		desired := val.ValueBool()
+		if cur == nil || *cur != desired {
+			setter(desired)
+			hasChanges = true
+		}
 	}
-	if !data.AcceleratedDatabaseRecovery.IsNull() && !data.AcceleratedDatabaseRecovery.IsUnknown() {
-		v := data.AcceleratedDatabaseRecovery.ValueBool()
-		opts.AcceleratedDatabaseRecovery = &v
-	}
-	if !data.AutoClose.IsNull() && !data.AutoClose.IsUnknown() {
-		v := data.AutoClose.ValueBool()
-		opts.AutoClose = &v
-	}
-	if !data.AutoShrink.IsNull() && !data.AutoShrink.IsUnknown() {
-		v := data.AutoShrink.ValueBool()
-		opts.AutoShrink = &v
-	}
-	if !data.AutoCreateStats.IsNull() && !data.AutoCreateStats.IsUnknown() {
-		v := data.AutoCreateStats.ValueBool()
-		opts.AutoCreateStats = &v
-	}
-	if !data.AutoUpdateStats.IsNull() && !data.AutoUpdateStats.IsUnknown() {
-		v := data.AutoUpdateStats.ValueBool()
-		opts.AutoUpdateStats = &v
-	}
-	if !data.AutoUpdateStatsAsync.IsNull() && !data.AutoUpdateStatsAsync.IsUnknown() {
-		v := data.AutoUpdateStatsAsync.ValueBool()
-		opts.AutoUpdateStatsAsync = &v
+
+	compareBool(data.ReadCommittedSnapshot, current.ReadCommittedSnapshot, func(v bool) { opts.ReadCommittedSnapshot = &v })
+	compareBool(data.AllowSnapshotIsolation, current.AllowSnapshotIsolation, func(v bool) { opts.AllowSnapshotIsolation = &v })
+	compareBool(data.AcceleratedDatabaseRecovery, current.AcceleratedDatabaseRecovery, func(v bool) { opts.AcceleratedDatabaseRecovery = &v })
+	compareBool(data.AutoClose, current.AutoClose, func(v bool) { opts.AutoClose = &v })
+	compareBool(data.AutoShrink, current.AutoShrink, func(v bool) { opts.AutoShrink = &v })
+	compareBool(data.AutoCreateStats, current.AutoCreateStats, func(v bool) { opts.AutoCreateStats = &v })
+	compareBool(data.AutoUpdateStats, current.AutoUpdateStats, func(v bool) { opts.AutoUpdateStats = &v })
+	compareBool(data.AutoUpdateStatsAsync, current.AutoUpdateStatsAsync, func(v bool) { opts.AutoUpdateStatsAsync = &v })
+
+	if !hasChanges {
+		tflog.Debug(ctx, "applyDatabaseOptions: no changes detected, skipping ALTER DATABASE")
+		return nil
 	}
 
 	return r.ctx.Client.SetDatabaseOptions(ctx, data.Name.ValueString(), opts)
