@@ -63,8 +63,8 @@ func (p *MssqlProvider) Schema(ctx context.Context, req provider.SchemaRequest, 
 				Optional:            true,
 			},
 			"sql_auth": schema.SingleNestedAttribute{
-				Description: "When provided, SQL authentication will be used when connecting.",
-				Optional:    true,
+				Description: "SQL authentication credentials used when connecting.",
+				Required:    true,
 				Attributes: map[string]schema.Attribute{
 					"username": schema.StringAttribute{
 						Description: "User name for SQL authentication.",

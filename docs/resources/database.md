@@ -3,12 +3,12 @@
 page_title: "mssql_database Resource - mssql"
 subcategory: ""
 description: |-
-  Manages a SQL Server database including engine options and scoped configurations.
+  Manages a SQL Server database including engine options and scoped configurations. Note: Destroy removes the resource from Terraform state but does not drop the database from the server.
 ---
 
 # mssql_database (Resource)
 
-Manages a SQL Server database including engine options and scoped configurations.
+Manages a SQL Server database including engine options and scoped configurations. **Note:** Destroy removes the resource from Terraform state but does not drop the database from the server.
 
 
 

@@ -45,6 +45,8 @@ Use this resource to install tools, run bootstrap scripts, or execute any SQL th
 
 The script is executed on create and when the version changes. Terraform tracks the version in state to determine when to re-run the script.
 
+delete_script is only executed when the resource is destroyed (not when version changes).
+
 **Example usage:**
 ` + "```hcl" + `
 resource "mssql_script" "first_responder_kit" {
@@ -87,11 +89,8 @@ resource "mssql_script" "first_responder_kit" {
 				Optional:            true,
 			},
 			"version": schema.StringAttribute{
-				MarkdownDescription: "Version string to track script changes. When this changes, the create_script is re-executed. Typically set to `md5(file(\"script.sql\"))` to automatically detect file changes.",
+				MarkdownDescription: "Version string to track script changes. When this changes, the create_script is re-executed in-place (no destroy/recreate). Typically set to `md5(file(\"script.sql\"))` to automatically detect file changes.",
 				Required:            true,
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.RequiresReplace(),
-				},
 			},
 		},
 	}
@@ -166,6 +165,24 @@ func (r *MssqlScriptResource) Update(ctx context.Context, req resource.UpdateReq
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
+	}
+
+	// Re-execute on version change (in-place).
+	if !plan.Version.Equal(state.Version) {
+		resp.Diagnostics.AddWarning(
+			"Executing arbitrary SQL",
+			"The mssql_script resource executes the provided SQL as-is. Review scripts carefully and ensure they are idempotent and safe.",
+		)
+
+		if err := r.ctx.Client.ExecScript(ctx, plan.DatabaseName.ValueString(), plan.CreateScript.ValueString()); err != nil {
+			resp.Diagnostics.AddError(
+				fmt.Sprintf("Error executing script %s", plan.Name.ValueString()),
+				err.Error(),
+			)
+			return
+		}
+
+		tflog.Debug(ctx, fmt.Sprintf("Re-executed script %s in database %s due to version change", plan.Name.ValueString(), plan.DatabaseName.ValueString()))
 	}
 
 	// If create_script changes without version change, we intentionally do NOT re-run.

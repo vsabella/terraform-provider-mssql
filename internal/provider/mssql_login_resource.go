@@ -137,11 +137,6 @@ func loginToResourceWithServer(data *MssqlLoginResourceModel, login mssql.Login,
 	}
 }
 
-// fallback to keep existing behavior if serverID is empty
-func loginToResource(data *MssqlLoginResourceModel, login mssql.Login) {
-	loginToResourceWithServer(data, login, "")
-}
-
 func parseLoginId(id string) (string, error) {
 	parts := strings.SplitN(id, "/", 2)
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {

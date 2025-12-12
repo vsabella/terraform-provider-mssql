@@ -13,6 +13,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	"github.com/vsabella/terraform-provider-mssql/internal/core"
@@ -106,6 +107,9 @@ resource "mssql_grant" "schema_control" {
 			"object_type": schema.StringAttribute{
 				MarkdownDescription: "Type of object to grant permission on (e.g., SCHEMA, TABLE, VIEW, PROCEDURE). If not specified, grants a database-level permission.",
 				Optional:            true,
+				Validators: []validator.String{
+					objectTypeValidator{},
+				},
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
@@ -204,6 +208,14 @@ func (r *MssqlGrantResource) Read(ctx context.Context, req resource.ReadRequest,
 		data.Database = types.StringValue(database)
 	}
 
+	hasObjectType := !data.ObjectType.IsNull() && data.ObjectType.ValueString() != ""
+	hasObjectName := !data.ObjectName.IsNull() && data.ObjectName.ValueString() != ""
+	if hasObjectType != hasObjectName {
+		resp.Diagnostics.AddError("Invalid grant state",
+			"Both 'object_type' and 'object_name' must be specified together, or neither.")
+		return
+	}
+
 	lookupGrant := mssql.GrantPermission{
 		Database:   database,
 		Principal:  data.Principal.ValueString(),
@@ -262,6 +274,14 @@ func (r *MssqlGrantResource) Delete(ctx context.Context, req resource.DeleteRequ
 		database = r.ctx.Database
 	}
 
+	hasObjectType := !data.ObjectType.IsNull() && data.ObjectType.ValueString() != ""
+	hasObjectName := !data.ObjectName.IsNull() && data.ObjectName.ValueString() != ""
+	if hasObjectType != hasObjectName {
+		resp.Diagnostics.AddError("Invalid grant state",
+			"Both 'object_type' and 'object_name' must be specified together, or neither.")
+		return
+	}
+
 	grant := mssql.GrantPermission{
 		Database:   database,
 		Principal:  data.Principal.ValueString(),
@@ -285,6 +305,11 @@ func (r *MssqlGrantResource) ImportState(ctx context.Context, req resource.Impor
 	if len(parts) < 4 {
 		resp.Diagnostics.AddError("Invalid import ID",
 			"Import ID must be in format: <server_id>/<database>/<principal>/<permission> or <server_id>/<database>/<principal>/<permission>/<object_type>/<object_name>")
+		return
+	}
+	if len(parts) == 5 {
+		resp.Diagnostics.AddError("Invalid import ID",
+			"When importing an object-level grant, both <object_type> and <object_name> must be provided.")
 		return
 	}
 
@@ -316,6 +341,11 @@ func (r *MssqlGrantResource) ImportState(ctx context.Context, req resource.Impor
 			resp.Diagnostics.AddError("Invalid import ID", fmt.Sprintf("Failed to decode object_name: %s", err))
 			return
 		}
+	}
+	if (objectType == "") != (objectName == "") {
+		resp.Diagnostics.AddError("Invalid import ID",
+			"When importing an object-level grant, both <object_type> and <object_name> must be provided.")
+		return
 	}
 
 	canonical := grantToId(r.ctx.ServerID, mssql.GrantPermission{

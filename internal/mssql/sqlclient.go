@@ -501,11 +501,9 @@ func (m client) encodePermissionId(grant GrantPermission) string {
 		url.QueryEscape(grant.Principal),
 		url.QueryEscape(grant.Permission),
 	}
-	if grant.ObjectType != "" {
+	if grant.ObjectType != "" && grant.ObjectName != "" {
 		parts = append(parts, url.QueryEscape(grant.ObjectType))
-		if grant.ObjectName != "" {
-			parts = append(parts, url.QueryEscape(grant.ObjectName))
-		}
+		parts = append(parts, url.QueryEscape(grant.ObjectName))
 	}
 	return strings.Join(parts, "/")
 }
@@ -583,7 +581,7 @@ func (m client) ReadPermission(ctx context.Context, grant GrantPermission) (Gran
 	tflog.Debug(ctx, fmt.Sprintf("Reading permission: %s", cmd))
 
 	var objType, objSchema, objName string
-	if grant.ObjectType != "" {
+	if grant.ObjectType != "" && grant.ObjectName != "" {
 		err := result.Scan(&grant.Principal, &grant.Permission, &objType, &objSchema, &objName)
 		if err != nil {
 			return grant, err
@@ -616,14 +614,14 @@ func (m client) ReadPermission(ctx context.Context, grant GrantPermission) (Gran
 // normalizeObjectType converts user-friendly object types to SQL Server securable class names
 // Valid inputs: SCHEMA, OBJECT, TABLE, VIEW, PROCEDURE, FUNCTION
 // SQL Server only recognizes SCHEMA and OBJECT as securable classes for ON clause
-func normalizeObjectType(objectType string) string {
-	switch strings.ToUpper(objectType) {
+func normalizeObjectType(objectType string) (string, error) {
+	switch strings.ToUpper(strings.TrimSpace(objectType)) {
 	case "SCHEMA":
-		return "SCHEMA"
-	case "OBJECT", "TABLE", "VIEW", "PROCEDURE", "FUNCTION":
-		return "OBJECT"
+		return "SCHEMA", nil
+	case "OBJECT", "TABLE", "VIEW", "PROCEDURE", "FUNCTION", "PROC":
+		return "OBJECT", nil
 	default:
-		return objectType // Pass through as-is for other types
+		return "", fmt.Errorf("object_type must be one of SCHEMA, OBJECT, TABLE, VIEW, PROCEDURE, FUNCTION (or PROC); got %q", objectType)
 	}
 }
 
@@ -656,10 +654,16 @@ func (m client) GrantPermission(ctx context.Context, grant GrantPermission) (Gra
 
 	var query string
 	var args []any
+	if (strings.TrimSpace(grant.ObjectType) == "") != (strings.TrimSpace(grant.ObjectName) == "") {
+		return grant, fmt.Errorf("object_type and object_name must be set together")
+	}
 	if grant.ObjectType != "" && grant.ObjectName != "" {
 		// Object-level grant: GRANT permission ON securable_class::[objectname] TO [principal]
 		// Normalize object type to valid SQL Server securable class (SCHEMA or OBJECT)
-		securableClass := normalizeObjectType(grant.ObjectType)
+		securableClass, err := normalizeObjectType(grant.ObjectType)
+		if err != nil {
+			return grant, err
+		}
 		objSchema, objName := splitSchemaObject(grant.ObjectName)
 		if objSchema != "" {
 			if err := validateIdentifier("object schema", objSchema); err != nil {
@@ -728,9 +732,15 @@ func (m client) RevokePermission(ctx context.Context, grant GrantPermission) err
 
 	var query string
 	var args []any
+	if (strings.TrimSpace(grant.ObjectType) == "") != (strings.TrimSpace(grant.ObjectName) == "") {
+		return fmt.Errorf("object_type and object_name must be set together")
+	}
 	if grant.ObjectType != "" && grant.ObjectName != "" {
 		// Object-level revoke with normalized securable class
-		securableClass := normalizeObjectType(grant.ObjectType)
+		securableClass, err := normalizeObjectType(grant.ObjectType)
+		if err != nil {
+			return err
+		}
 		objSchema, objName := splitSchemaObject(grant.ObjectName)
 		if objSchema != "" {
 			if err := validateIdentifier("object schema", objSchema); err != nil {

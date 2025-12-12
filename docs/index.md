@@ -30,12 +30,12 @@ provider "mssql" {}
 ### Required
 
 - `host` (String) MSSQL Server Hostname
+- `sql_auth` (Attributes) SQL authentication credentials used when connecting. (see [below for nested schema](#nestedatt--sql_auth))
 
 ### Optional
 
 - `database` (String) Database to connect to. Default: `master`
 - `port` (Number) MSSQL Server Port. Default: `1433`
-- `sql_auth` (Attributes) When provided, SQL authentication will be used when connecting. (see [below for nested schema](#nestedatt--sql_auth))
 
 <a id="nestedatt--sql_auth"></a>
 ### Nested Schema for `sql_auth`

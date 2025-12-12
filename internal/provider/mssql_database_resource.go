@@ -62,7 +62,7 @@ func (r *MssqlDatabaseResource) Metadata(ctx context.Context, req resource.Metad
 
 func (r *MssqlDatabaseResource) Schema(ctx context.Context, req resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Manages a SQL Server database including engine options and scoped configurations.",
+		MarkdownDescription: "Manages a SQL Server database including engine options and scoped configurations. **Note:** Destroy removes the resource from Terraform state but does not drop the database from the server.",
 
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
@@ -602,7 +602,8 @@ func (r *MssqlDatabaseResource) refreshDatabaseState(ctx context.Context, data *
 	// Note: We don't refresh scoped_configurations from the server to avoid
 	// overwriting user's intended configuration with all server settings.
 	// The user-specified configurations are treated as the source of truth.
-	// If scoped_configuration is null/unknown, set it to an empty set
+	// If scoped_configuration is null/unknown, keep it unset (typed null) so we don't
+	// accidentally introduce drift.
 	if data.ScopedConfigurations.IsNull() || data.ScopedConfigurations.IsUnknown() {
 		data.ScopedConfigurations = types.SetNull(types.ObjectType{
 			AttrTypes: map[string]attr.Type{
