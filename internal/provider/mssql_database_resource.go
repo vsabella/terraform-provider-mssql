@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
@@ -61,11 +62,11 @@ func (r *MssqlDatabaseResource) Metadata(ctx context.Context, req resource.Metad
 
 func (r *MssqlDatabaseResource) Schema(ctx context.Context, req resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Manages a SQL Server database including engine options and scoped configurations. The resource ID is the database name, making it resilient to RDS Multi-AZ failovers.",
+		MarkdownDescription: "Manages a SQL Server database including engine options and scoped configurations.",
 
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
-				MarkdownDescription: "Database name (used as resource identifier). This is the same as `name` and is used for lookups, ensuring stability across RDS failovers.",
+				MarkdownDescription: "Resource identifier in format `<server_id>/<database>` where `server_id` is `host:port`.",
 				Computed:            true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
@@ -193,7 +194,7 @@ func (r *MssqlDatabaseResource) Create(ctx context.Context, req resource.CreateR
 		return
 	}
 
-	data.Id = types.StringValue(data.Name.ValueString())
+	data.Id = types.StringValue(fmt.Sprintf("%s/%s", r.ctx.ServerID, data.Name.ValueString()))
 	tflog.Debug(ctx, fmt.Sprintf("Created database %s", data.Name.ValueString()))
 
 	// Apply database options if any are set
@@ -224,7 +225,11 @@ func (r *MssqlDatabaseResource) Read(ctx context.Context, req resource.ReadReque
 		return
 	}
 
-	dbName := state.Id.ValueString()
+	dbName, err := parseDatabaseId(state.Id.ValueString())
+	if err != nil {
+		resp.Diagnostics.AddError("Invalid database ID", err.Error())
+		return
+	}
 	db, err := r.ctx.Client.GetDatabase(ctx, dbName)
 
 	if errors.Is(err, sql.ErrNoRows) {
@@ -236,7 +241,7 @@ func (r *MssqlDatabaseResource) Read(ctx context.Context, req resource.ReadReque
 		return
 	}
 
-	state.Id = types.StringValue(db.Name)
+	state.Id = types.StringValue(fmt.Sprintf("%s/%s", r.ctx.ServerID, db.Name))
 	state.Name = types.StringValue(db.Name)
 
 	// Refresh options and scoped configurations
@@ -311,7 +316,13 @@ func (r *MssqlDatabaseResource) Delete(ctx context.Context, req resource.DeleteR
 }
 
 func (r *MssqlDatabaseResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	dbName := req.ID
+	// Import ID must be <server_id>/<database>
+	parts := strings.Split(req.ID, "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		resp.Diagnostics.AddError("Invalid import ID", "Import ID must be in format <server_id>/<database>")
+		return
+	}
+	dbName := parts[1]
 
 	db, err := r.ctx.Client.GetDatabase(ctx, dbName)
 	if err != nil {
@@ -355,7 +366,7 @@ func (r *MssqlDatabaseResource) ImportState(ctx context.Context, req resource.Im
 	}
 
 	// Set basic attributes
-	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), db.Name)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), fmt.Sprintf("%s/%s", r.ctx.ServerID, db.Name))...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("name"), db.Name)...)
 
 	// Get database options
@@ -413,6 +424,14 @@ func (r *MssqlDatabaseResource) ImportState(ctx context.Context, req resource.Im
 			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("auto_update_stats_async"), types.BoolNull())...)
 		}
 	}
+}
+
+func parseDatabaseId(id string) (string, error) {
+	parts := strings.Split(id, "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", fmt.Errorf("expected id in format <server_id>/<database>, got %q", id)
+	}
+	return parts[1], nil
 }
 
 func (r *MssqlDatabaseResource) applyDatabaseOptions(ctx context.Context, data *MssqlDatabaseResourceModel) error {

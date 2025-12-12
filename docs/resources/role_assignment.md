@@ -3,12 +3,45 @@
 page_title: "mssql_role_assignment Resource - mssql"
 subcategory: ""
 description: |-
-  MssqlUser resource
+  Assigns a principal to a database role or server role.
+  Database role example:
+  hcl
+  resource "mssql_role_assignment" "db_reader" {
+    database  = mssql_database.app.name
+    role      = "db_datareader"
+    principal = mssql_user.app.username
+  }
+  
+  Server role example (for telemetry):
+  hcl
+  resource "mssql_role_assignment" "telemetry_state_reader" {
+    server_role = true
+    role        = "##MS_ServerStateReader##"
+    principal   = mssql_login.telemetry.name
+  }
 ---
 
 # mssql_role_assignment (Resource)
 
-MssqlUser resource
+Assigns a principal to a database role or server role.
+
+**Database role example:**
+```hcl
+resource "mssql_role_assignment" "db_reader" {
+  database  = mssql_database.app.name
+  role      = "db_datareader"
+  principal = mssql_user.app.username
+}
+```
+
+**Server role example (for telemetry):**
+```hcl
+resource "mssql_role_assignment" "telemetry_state_reader" {
+  server_role = true
+  role        = "##MS_ServerStateReader##"
+  principal   = mssql_login.telemetry.name
+}
+```
 
 
 
@@ -17,8 +50,13 @@ MssqlUser resource
 
 ### Required
 
-- `principal` (String) Database principal (e.g. username) to assign the role to
-- `role` (String) Role to to assign
+- `principal` (String) Principal to assign to the role. For database roles, this is a database user. For server roles (`server_role = true`), this is a login.
+- `role` (String) Name of the role to assign. For server roles, use names like `##MS_ServerStateReader##`, `##MS_DefinitionReader##`, `##MS_DatabaseConnector##`.
+
+### Optional
+
+- `database` (String) Target database for database role assignments. If not specified, uses the provider's default database. Ignored when `server_role = true`.
+- `server_role` (Boolean) If true, assigns to a server-level role (ALTER SERVER ROLE). If false (default), assigns to a database role (ALTER ROLE). When true, `database` is ignored.
 
 ### Read-Only
 

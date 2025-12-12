@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -73,7 +74,7 @@ resource "mssql_grant" "schema_control" {
 
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
-				MarkdownDescription: "Resource identifier in format `database/principal/permission[/object_type/object_name]`.",
+				MarkdownDescription: "Resource identifier in format `<server_id>/<database>/<principal>/<permission>[/object_type/object_name]` where `server_id` is `host:port`.",
 				Computed:            true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
@@ -82,8 +83,10 @@ resource "mssql_grant" "schema_control" {
 			"database": schema.StringAttribute{
 				MarkdownDescription: "Target database. If not specified, uses the provider's configured database.",
 				Optional:            true,
+				Computed:            true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
+					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
 			"permission": schema.StringAttribute{
@@ -143,6 +146,13 @@ func (r *MssqlGrantResource) Create(ctx context.Context, req resource.CreateRequ
 		return
 	}
 
+	// Resolve effective database (explicit in state for clarity).
+	database := data.Database.ValueString()
+	if data.Database.IsUnknown() || data.Database.IsNull() || database == "" {
+		database = r.ctx.Database
+		data.Database = types.StringValue(database)
+	}
+
 	// Validate object_type and object_name
 	hasObjectType := !data.ObjectType.IsNull() && data.ObjectType.ValueString() != ""
 	hasObjectName := !data.ObjectName.IsNull() && data.ObjectName.ValueString() != ""
@@ -154,7 +164,7 @@ func (r *MssqlGrantResource) Create(ctx context.Context, req resource.CreateRequ
 	}
 
 	grant := mssql.GrantPermission{
-		Database:   data.Database.ValueString(),
+		Database:   database,
 		Principal:  data.Principal.ValueString(),
 		Permission: strings.ToUpper(data.Permission.ValueString()),
 		ObjectType: strings.ToUpper(data.ObjectType.ValueString()),
@@ -170,12 +180,12 @@ func (r *MssqlGrantResource) Create(ctx context.Context, req resource.CreateRequ
 	}
 
 	// Update state with normalized values from result
-	data.Id = types.StringValue(result.Id)
+	data.Id = types.StringValue(grantToId(r.ctx.ServerID, result))
 	if result.ObjectType != "" {
 		// Store the normalized object type (SCHEMA or OBJECT)
 		data.ObjectType = types.StringValue(result.ObjectType)
 	}
-	tflog.Debug(ctx, fmt.Sprintf("Granted permission %s to principal %s (id: %s)", grant.Permission, grant.Principal, result.Id))
+	tflog.Debug(ctx, fmt.Sprintf("Granted permission %s to principal %s (id: %s)", grant.Permission, grant.Principal, data.Id.ValueString()))
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
@@ -188,8 +198,14 @@ func (r *MssqlGrantResource) Read(ctx context.Context, req resource.ReadRequest,
 		return
 	}
 
+	database := data.Database.ValueString()
+	if database == "" {
+		database = r.ctx.Database
+		data.Database = types.StringValue(database)
+	}
+
 	lookupGrant := mssql.GrantPermission{
-		Database:   data.Database.ValueString(),
+		Database:   database,
 		Principal:  data.Principal.ValueString(),
 		Permission: strings.ToUpper(data.Permission.ValueString()),
 		ObjectType: strings.ToUpper(data.ObjectType.ValueString()),
@@ -205,9 +221,10 @@ func (r *MssqlGrantResource) Read(ctx context.Context, req resource.ReadRequest,
 		return
 	}
 
-	data.Id = types.StringValue(perm.Id)
+	data.Id = types.StringValue(grantToId(r.ctx.ServerID, perm))
 	data.Principal = types.StringValue(perm.Principal)
 	data.Permission = types.StringValue(perm.Permission)
+	// Keep database explicit in state for clarity.
 	if perm.Database != "" {
 		data.Database = types.StringValue(perm.Database)
 	}
@@ -240,8 +257,13 @@ func (r *MssqlGrantResource) Delete(ctx context.Context, req resource.DeleteRequ
 		return
 	}
 
+	database := data.Database.ValueString()
+	if database == "" {
+		database = r.ctx.Database
+	}
+
 	grant := mssql.GrantPermission{
-		Database:   data.Database.ValueString(),
+		Database:   database,
 		Principal:  data.Principal.ValueString(),
 		Permission: strings.ToUpper(data.Permission.ValueString()),
 		ObjectType: strings.ToUpper(data.ObjectType.ValueString()),
@@ -258,28 +280,74 @@ func (r *MssqlGrantResource) Delete(ctx context.Context, req resource.DeleteRequ
 }
 
 func (r *MssqlGrantResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	// ID format: database/principal/permission[/objecttype/objectname]
+	// ID format: <server_id>/<database>/<principal>/<permission>[/objecttype/objectname]
 	parts := strings.Split(req.ID, "/")
-	if len(parts) < 3 {
+	if len(parts) < 4 {
 		resp.Diagnostics.AddError("Invalid import ID",
-			"Import ID must be in format: database/principal/permission or database/principal/permission/objecttype/objectname")
+			"Import ID must be in format: <server_id>/<database>/<principal>/<permission> or <server_id>/<database>/<principal>/<permission>/<object_type>/<object_name>")
 		return
 	}
 
-	db := parts[0]
-	if db == "default" {
-		db = ""
+	db := parts[1]
+	if db == "" {
+		db = r.ctx.Database
 	}
 
-	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
-	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("database"), db)...)
-	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("principal"), parts[1])...)
-	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("permission"), parts[2])...)
-
-	if len(parts) > 3 {
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("object_type"), parts[3])...)
+	principal, err := url.QueryUnescape(parts[2])
+	if err != nil {
+		resp.Diagnostics.AddError("Invalid import ID", fmt.Sprintf("Failed to decode principal: %s", err))
+		return
 	}
+	permission, err := url.QueryUnescape(parts[3])
+	if err != nil {
+		resp.Diagnostics.AddError("Invalid import ID", fmt.Sprintf("Failed to decode permission: %s", err))
+		return
+	}
+
+	var objectType, objectName string
 	if len(parts) > 4 {
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("object_name"), parts[4])...)
+		if objectType, err = url.QueryUnescape(parts[4]); err != nil {
+			resp.Diagnostics.AddError("Invalid import ID", fmt.Sprintf("Failed to decode object_type: %s", err))
+			return
+		}
 	}
+	if len(parts) > 5 {
+		if objectName, err = url.QueryUnescape(parts[5]); err != nil {
+			resp.Diagnostics.AddError("Invalid import ID", fmt.Sprintf("Failed to decode object_name: %s", err))
+			return
+		}
+	}
+
+	canonical := grantToId(r.ctx.ServerID, mssql.GrantPermission{
+		Database:   db,
+		Principal:  principal,
+		Permission: permission,
+		ObjectType: objectType,
+		ObjectName: objectName,
+	})
+
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), canonical)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("database"), db)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("principal"), principal)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("permission"), permission)...)
+
+	if len(parts) > 4 {
+		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("object_type"), objectType)...)
+	}
+	if len(parts) > 5 {
+		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("object_name"), objectName)...)
+	}
+}
+
+func grantToId(serverID string, grant mssql.GrantPermission) string {
+	parts := []string{
+		serverID,
+		grant.Database,
+		grant.Principal,
+		grant.Permission,
+	}
+	if grant.ObjectType != "" && grant.ObjectName != "" {
+		parts = append(parts, grant.ObjectType, grant.ObjectName)
+	}
+	return strings.Join(parts, "/")
 }

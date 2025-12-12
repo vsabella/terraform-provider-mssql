@@ -18,7 +18,7 @@ func TestAccMssqlScriptResource(t *testing.T) {
 			{
 				Config: providerConfig + testAccMssqlScriptResourceConfig(),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("mssql_script.test", "id", "testdb/test_script"),
+					resource.TestCheckResourceAttr("mssql_script.test", "id", "127.0.0.1:1433/testdb/test_script"),
 					resource.TestCheckResourceAttr("mssql_script.test", "database_name", "testdb"),
 					resource.TestCheckResourceAttr("mssql_script.test", "name", "test_script"),
 					resource.TestCheckResourceAttr("mssql_script.test", "version", "v1"),
@@ -110,13 +110,3 @@ resource "mssql_script" "with_delete" {
 }
 `
 }
-
-
-
-
-
-
-
-
-
-

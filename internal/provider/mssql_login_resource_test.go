@@ -19,7 +19,7 @@ func TestAccMssqlLoginResource(t *testing.T) {
 			{
 				Config: providerConfig + testAccMssqlLoginResourceConfig("test_login", "TestPassword123!@#"),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("mssql_login.test", "id", "test_login"),
+					resource.TestCheckResourceAttr("mssql_login.test", "id", "127.0.0.1:1433/test_login"),
 					resource.TestCheckResourceAttr("mssql_login.test", "name", "test_login"),
 					resource.TestCheckResourceAttr("mssql_login.test", "default_database", "master"),
 				),
@@ -38,7 +38,7 @@ func TestAccMssqlLoginResource(t *testing.T) {
 				ImportState:             true,
 				ImportStateVerify:       true,
 				ImportStateVerifyIgnore: []string{"password"}, // Password cannot be read back
-				ImportStateId:           "test_login",
+				ImportStateId:           "127.0.0.1:1433/test_login",
 			},
 		},
 	})

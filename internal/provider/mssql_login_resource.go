@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -48,7 +49,7 @@ func (r *MssqlLoginResource) Schema(ctx context.Context, req resource.SchemaRequ
 
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
-				MarkdownDescription: "Login name (used as resource identifier).",
+				MarkdownDescription: "Resource identifier in format `<server_id>/<login_name>` where `server_id` is `host:port`.",
 				Computed:            true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
@@ -121,19 +122,32 @@ func (r *MssqlLoginResource) Create(ctx context.Context, req resource.CreateRequ
 		return
 	}
 
-	loginToResource(&data, login)
+	loginToResourceWithServer(&data, login, r.ctx.ServerID)
 	tflog.Debug(ctx, fmt.Sprintf("Created login %s", data.Name.ValueString()))
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
-func loginToResource(data *MssqlLoginResourceModel, login mssql.Login) {
-	data.Id = types.StringValue(login.Name)
+func loginToResourceWithServer(data *MssqlLoginResourceModel, login mssql.Login, serverID string) {
+	data.Id = types.StringValue(fmt.Sprintf("%s/%s", serverID, login.Name))
 	data.Name = types.StringValue(login.Name)
 	data.DefaultDatabase = types.StringValue(login.DefaultDatabase)
 	if login.DefaultLanguage != "" {
 		data.DefaultLanguage = types.StringValue(login.DefaultLanguage)
 	}
+}
+
+// fallback to keep existing behavior if serverID is empty
+func loginToResource(data *MssqlLoginResourceModel, login mssql.Login) {
+	loginToResourceWithServer(data, login, "")
+}
+
+func parseLoginId(id string) (string, error) {
+	parts := strings.SplitN(id, "/", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", fmt.Errorf("expected id in format <server_id>/<login_name>, got %q", id)
+	}
+	return parts[1], nil
 }
 
 func (r *MssqlLoginResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
@@ -144,7 +158,13 @@ func (r *MssqlLoginResource) Read(ctx context.Context, req resource.ReadRequest,
 		return
 	}
 
-	login, err := r.ctx.Client.GetLogin(ctx, data.Id.ValueString())
+	loginName, err := parseLoginId(data.Id.ValueString())
+	if err != nil {
+		resp.Diagnostics.AddError("Invalid login ID", err.Error())
+		return
+	}
+
+	login, err := r.ctx.Client.GetLogin(ctx, loginName)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		resp.State.RemoveResource(ctx)
@@ -154,7 +174,7 @@ func (r *MssqlLoginResource) Read(ctx context.Context, req resource.ReadRequest,
 		return
 	}
 
-	loginToResource(&data, login)
+	loginToResourceWithServer(&data, login, r.ctx.ServerID)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
@@ -179,7 +199,7 @@ func (r *MssqlLoginResource) Update(ctx context.Context, req resource.UpdateRequ
 		return
 	}
 
-	loginToResource(&data, login)
+	loginToResourceWithServer(&data, login, r.ctx.ServerID)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
@@ -191,7 +211,13 @@ func (r *MssqlLoginResource) Delete(ctx context.Context, req resource.DeleteRequ
 		return
 	}
 
-	err := r.ctx.Client.DeleteLogin(ctx, data.Id.ValueString())
+	loginName, err := parseLoginId(data.Id.ValueString())
+	if err != nil {
+		resp.Diagnostics.AddError("Invalid login ID", err.Error())
+		return
+	}
+
+	err = r.ctx.Client.DeleteLogin(ctx, loginName)
 	if err != nil {
 		resp.Diagnostics.AddError("Unable to delete login", fmt.Sprintf("Unable to delete login %s, got error: %s", data.Name.ValueString(), err))
 		return
@@ -199,8 +225,12 @@ func (r *MssqlLoginResource) Delete(ctx context.Context, req resource.DeleteRequ
 }
 
 func (r *MssqlLoginResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	// Import ID is the login name
-	loginName := req.ID
+	// Import ID: <server_id>/<login_name>
+	loginName, err := parseLoginId(req.ID)
+	if err != nil {
+		resp.Diagnostics.AddError("Invalid import ID", err.Error())
+		return
+	}
 
 	login, err := r.ctx.Client.GetLogin(ctx, loginName)
 	if err != nil {
@@ -208,7 +238,7 @@ func (r *MssqlLoginResource) ImportState(ctx context.Context, req resource.Impor
 		return
 	}
 
-	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), login.Name)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), fmt.Sprintf("%s/%s", r.ctx.ServerID, login.Name))...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("name"), login.Name)...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("default_database"), login.DefaultDatabase)...)
 	if login.DefaultLanguage != "" {
@@ -219,13 +249,3 @@ func (r *MssqlLoginResource) ImportState(ctx context.Context, req resource.Impor
 		"The login password cannot be read from the server. You must set the password attribute in your configuration. "+
 			"The next apply will update the password.")
 }
-
-
-
-
-
-
-
-
-
-

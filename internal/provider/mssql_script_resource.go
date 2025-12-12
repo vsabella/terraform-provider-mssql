@@ -58,7 +58,7 @@ resource "mssql_script" "first_responder_kit" {
 
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
-				MarkdownDescription: "Resource identifier (database_name/name).",
+				MarkdownDescription: "Resource identifier in format `<server_id>/<database>/<name>` where `server_id` is `host:port`.",
 				Computed:            true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
@@ -122,6 +122,11 @@ func (r *MssqlScriptResource) Create(ctx context.Context, req resource.CreateReq
 		return
 	}
 
+	resp.Diagnostics.AddWarning(
+		"Executing arbitrary SQL",
+		"The mssql_script resource executes the provided SQL as-is. Review scripts carefully and ensure they are idempotent and safe.",
+	)
+
 	// Execute the create script
 	err := r.ctx.Client.ExecScript(ctx, data.DatabaseName.ValueString(), data.CreateScript.ValueString())
 	if err != nil {
@@ -133,7 +138,7 @@ func (r *MssqlScriptResource) Create(ctx context.Context, req resource.CreateReq
 	}
 
 	// Set the ID
-	data.Id = types.StringValue(fmt.Sprintf("%s/%s", data.DatabaseName.ValueString(), data.Name.ValueString()))
+	data.Id = types.StringValue(fmt.Sprintf("%s/%s/%s", r.ctx.ServerID, data.DatabaseName.ValueString(), data.Name.ValueString()))
 	tflog.Debug(ctx, fmt.Sprintf("Executed script %s in database %s", data.Name.ValueString(), data.DatabaseName.ValueString()))
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)

@@ -3,12 +3,12 @@
 page_title: "mssql_role Resource - mssql"
 subcategory: ""
 description: |-
-  MssqlRole resource
+  Creates a database role in the specified database.
 ---
 
 # mssql_role (Resource)
 
-MssqlRole resource
+Creates a database role in the specified database.
 
 
 
@@ -17,7 +17,11 @@ MssqlRole resource
 
 ### Required
 
-- `name` (String)
+- `name` (String) Name of the role to create.
+
+### Optional
+
+- `database` (String) Target database for the role. If not specified, uses the provider's default database.
 
 ### Read-Only
 

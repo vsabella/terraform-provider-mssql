@@ -78,7 +78,7 @@ func TestAccMssqlGrantResource_SchemaQualifiedObject(t *testing.T) {
 				ImportStateIdFunc: func(s *terraform.State) (string, error) {
 					db := s.RootModule().Resources["mssql_database.gdb"].Primary.Attributes["name"]
 					principal := s.RootModule().Resources["mssql_user.schema_object_user"].Primary.Attributes["username"]
-					return fmt.Sprintf("%s/%s/SELECT/TABLE/tools.widgets", db, principal), nil
+					return fmt.Sprintf("127.0.0.1:1433/%s/%s/SELECT/TABLE/tools.widgets", db, principal), nil
 				},
 			},
 		},

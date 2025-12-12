@@ -3,12 +3,12 @@
 page_title: "mssql_user Resource - mssql"
 subcategory: ""
 description: |-
-  MssqlUser resource
+  Manages a SQL Server database user. Supports both contained users (with password) and login-based users (mapped to a server login).
 ---
 
 # mssql_user (Resource)
 
-MssqlUser resource
+Manages a SQL Server database user. Supports both contained users (with password) and login-based users (mapped to a server login).
 
 
 
@@ -17,16 +17,20 @@ MssqlUser resource
 
 ### Required
 
-- `password` (String, Sensitive) Password for the user account. Must follow strong password policies defined for SQL server. Passwords are case-sensitive, length must be 8-128 chars, can include all characters except `'` or `name`.
-
-~> **Note** Password will be stored in the raw state as plain-text. [Read more about sensitive data in state](https://www.terraform.io/language/state/sensitive-data).
-- `username` (String) MssqlUser configurable attribute with default value
+- `username` (String) Database user name. Changing this forces a new resource to be created.
 
 ### Optional
 
-- `default_schema` (String)
-- `external` (Boolean) Is this an external user (like Microsoft EntraID)
-- `sid` (String) Set custom SID for the user
+- `database` (String) Target database for the user. If not specified, uses the provider's configured database. Changing this forces a new resource.
+- `default_schema` (String) Default schema for the user. Defaults to `dbo`.
+- `external` (Boolean) Is this an external user (like Microsoft EntraID). Mutually exclusive with `password` and `login_name`.
+- `login_name` (String) Name of the server login to map this user to. Use this for traditional login-based users (e.g., RDS SQL Server). When set, the user is created with `CREATE USER ... FOR LOGIN ...`. Mutually exclusive with `password`.
+- `password` (String, Sensitive) Password for contained database users. Must follow strong password policies defined for SQL server. Passwords are case-sensitive, length must be 8-128 chars, can include all characters except `'` or `name`.
+
+~> **Note** Password will be stored in the raw state as plain-text. [Read more about sensitive data in state](https://www.terraform.io/language/state/sensitive-data).
+
+~> **Note** Either `password` or `login_name` must be specified, but not both. Use `password` for contained database users (Azure SQL) or `login_name` for traditional login-mapped users (RDS SQL Server).
+- `sid` (String) Set custom SID for the user.
 
 ### Read-Only
 

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/terraform"
 )
 
 func TestAccMssqlDatabaseResource(t *testing.T) {
@@ -19,8 +20,7 @@ func TestAccMssqlDatabaseResource(t *testing.T) {
 			{
 				Config: providerConfig + testAccMssqlDatabaseResourceConfig("test_database"),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					// Verify the id equals the name (RDS-safe behavior)
-					resource.TestCheckResourceAttr("mssql_database.test", "id", "test_database"),
+					resource.TestCheckResourceAttr("mssql_database.test", "id", "127.0.0.1:1433/test_database"),
 					resource.TestCheckResourceAttr("mssql_database.test", "name", "test_database"),
 					// Verify default values
 					resource.TestCheckResourceAttr("mssql_database.test", "recovery_model", "FULL"),
@@ -33,7 +33,9 @@ func TestAccMssqlDatabaseResource(t *testing.T) {
 				ResourceName:      "mssql_database.test",
 				ImportState:       true,
 				ImportStateVerify: true,
-				ImportStateId:     "test_database",
+				ImportStateIdFunc: func(_ *terraform.State) (string, error) {
+					return "127.0.0.1:1433/test_database", nil
+				},
 				// scoped_configuration is not imported
 				ImportStateVerifyIgnore: []string{"scoped_configuration"},
 			},
@@ -138,9 +140,9 @@ func TestAccMssqlDatabaseResource_MultipleDBs(t *testing.T) {
 			{
 				Config: providerConfig + testAccMssqlDatabaseResourceConfigMultiple(),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("mssql_database.db1", "id", "test_db_one"),
+					resource.TestCheckResourceAttr("mssql_database.db1", "id", "127.0.0.1:1433/test_db_one"),
 					resource.TestCheckResourceAttr("mssql_database.db1", "name", "test_db_one"),
-					resource.TestCheckResourceAttr("mssql_database.db2", "id", "test_db_two"),
+					resource.TestCheckResourceAttr("mssql_database.db2", "id", "127.0.0.1:1433/test_db_two"),
 					resource.TestCheckResourceAttr("mssql_database.db2", "name", "test_db_two"),
 				),
 			},

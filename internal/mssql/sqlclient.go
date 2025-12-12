@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-log/tflog"
@@ -98,6 +99,15 @@ func buildCreateUser(create CreateUser) (string, []any, error) {
 
 	var args []any
 
+	if err := validateIdentifier("username", create.Username); err != nil {
+		return "", nil, err
+	}
+	if create.LoginName != "" {
+		if err := validateIdentifier("login_name", create.LoginName); err != nil {
+			return "", nil, err
+		}
+	}
+
 	// Login-based user validations
 	if create.LoginName != "" && create.Password != "" {
 		return "", nil, fmt.Errorf("invalid user %s, login-based users may not have passwords (password is on the login)", create.Username)
@@ -117,6 +127,10 @@ func buildCreateUser(create CreateUser) (string, []any, error) {
 
 	if create.DefaultSchema == "" {
 		return "", nil, fmt.Errorf("invalid user %s, default schema must be specified", create.Username)
+	}
+
+	if err := validateIdentifier("default_schema", create.DefaultSchema); err != nil {
+		return "", nil, err
 	}
 
 	cmdBuilder.WriteString("DECLARE @sql NVARCHAR(max);\n")
@@ -228,7 +242,16 @@ func (m client) updateUserWithConn(ctx context.Context, conn *sql.DB, update Upd
 	var optionsBuilder strings.Builder
 	var args []any
 
+	if err := validateIdentifier("username", update.Id); err != nil {
+		return User{}, err
+	}
+
 	addOption(&optionsBuilder, &args, "PASSWORD", update.Password, false)
+	if update.DefaultSchema != "" {
+		if err := validateIdentifier("default_schema", update.DefaultSchema); err != nil {
+			return User{}, err
+		}
+	}
 	addOption(&optionsBuilder, &args, "DEFAULT_SCHEMA", update.DefaultSchema, true)
 
 	if optionsBuilder.Len() > 0 {
@@ -253,6 +276,10 @@ func (m client) updateUserWithConn(ctx context.Context, conn *sql.DB, update Upd
 }
 
 func (m client) deleteUserWithConn(ctx context.Context, conn *sql.DB, username string) error {
+	if err := validateIdentifier("username", username); err != nil {
+		return err
+	}
+
 	cmd := `DECLARE @sql NVARCHAR(max);
           SET @sql = 'IF EXISTS (SELECT 1 FROM [sys].[database_principals] WHERE [type] IN (''E'',''S'',''X'') AND [name] = ' + QUOTENAME(@p1, '''') + ') DROP USER ' + QUOTENAME(@p2);
           EXEC (@sql);`
@@ -262,33 +289,29 @@ func (m client) deleteUserWithConn(ctx context.Context, conn *sql.DB, username s
 	return err
 }
 
-func encodeRoleMembershipId(role string, member string) string {
-	return fmt.Sprintf("%s/%s", url.QueryEscape(role), url.QueryEscape(member))
-}
-
-func decodeRoleMembershipId(id string) (string, string, error) {
-	re, me, found := strings.Cut(id, "/")
-	if !found {
-		return "", "", sql.ErrNoRows
+func (m client) encodeRoleMembershipId(database string, isServer bool, role string, member string) string {
+	host := url.QueryEscape(m.host)
+	if isServer {
+		return strings.Join([]string{host, "server", url.QueryEscape(role), url.QueryEscape(member)}, "/")
 	}
-
-	role, err := url.QueryUnescape(re)
-	if err != nil {
-		return "", "", err
+	db := database
+	if db == "" {
+		db = m.database
 	}
-
-	member, err := url.QueryUnescape(me)
-	if err != nil {
-		return "", "", err
-	}
-
-	return role, member, err
+	return strings.Join([]string{host, "db", url.QueryEscape(db), url.QueryEscape(role), url.QueryEscape(member)}, "/")
 }
 
 // Database role membership operations
 
 func (m client) ReadRoleMembership(ctx context.Context, database string, role string, principal string) (RoleMembership, error) {
 	var roleMembership RoleMembership
+
+	if err := validateIdentifier("role", role); err != nil {
+		return roleMembership, err
+	}
+	if err := validateIdentifier("member", principal); err != nil {
+		return roleMembership, err
+	}
 
 	conn, closeConn, err := m.getConnForDatabase(database)
 	if err != nil {
@@ -316,12 +339,19 @@ WHERE r.type = 'R' AND r.name = @role AND m.name = @principal`
 		return roleMembership, err
 	}
 
-	roleMembership.Id = encodeRoleMembershipId(roleMembership.Role, roleMembership.Member)
+	roleMembership.Id = m.encodeRoleMembershipId(database, false, roleMembership.Role, roleMembership.Member)
 	return roleMembership, nil
 }
 
 func (m client) AssignRole(ctx context.Context, database string, role string, member string) (RoleMembership, error) {
 	var roleMembership RoleMembership
+
+	if err := validateIdentifier("role", role); err != nil {
+		return roleMembership, err
+	}
+	if err := validateIdentifier("member", member); err != nil {
+		return roleMembership, err
+	}
 
 	conn, closeConn, err := m.getConnForDatabase(database)
 	if err != nil {
@@ -348,6 +378,13 @@ func (m client) AssignRole(ctx context.Context, database string, role string, me
 }
 
 func (m client) UnassignRole(ctx context.Context, database string, role string, principal string) error {
+	if err := validateIdentifier("role", role); err != nil {
+		return err
+	}
+	if err := validateIdentifier("member", principal); err != nil {
+		return err
+	}
+
 	conn, closeConn, err := m.getConnForDatabase(database)
 	if err != nil {
 		return err
@@ -374,6 +411,13 @@ func (m client) UnassignRole(ctx context.Context, database string, role string, 
 func (m client) ReadServerRoleMembership(ctx context.Context, role string, principal string) (RoleMembership, error) {
 	var roleMembership RoleMembership
 
+	if err := validateIdentifier("server role", role); err != nil {
+		return roleMembership, err
+	}
+	if err := validateIdentifier("member", principal); err != nil {
+		return roleMembership, err
+	}
+
 	cmd := `SELECT r.name AS role_name, m.name AS member_name
 FROM sys.server_role_members rm
 JOIN sys.server_principals r ON rm.role_principal_id = r.principal_id
@@ -392,12 +436,19 @@ WHERE r.name = @role AND m.name = @principal`
 		return roleMembership, err
 	}
 
-	roleMembership.Id = encodeRoleMembershipId(roleMembership.Role, roleMembership.Member)
+	roleMembership.Id = m.encodeRoleMembershipId("", true, roleMembership.Role, roleMembership.Member)
 	return roleMembership, nil
 }
 
 func (m client) AssignServerRole(ctx context.Context, role string, principal string) (RoleMembership, error) {
 	var roleMembership RoleMembership
+
+	if err := validateIdentifier("server role", role); err != nil {
+		return roleMembership, err
+	}
+	if err := validateIdentifier("member", principal); err != nil {
+		return roleMembership, err
+	}
 
 	cmd := `DECLARE @sql NVARCHAR(max);
           SET @sql = 'ALTER SERVER ROLE ' + QUOTENAME(@role) + ' ADD MEMBER ' + QUOTENAME(@principal);
@@ -416,6 +467,13 @@ func (m client) AssignServerRole(ctx context.Context, role string, principal str
 }
 
 func (m client) UnassignServerRole(ctx context.Context, role string, principal string) error {
+	if err := validateIdentifier("server role", role); err != nil {
+		return err
+	}
+	if err := validateIdentifier("member", principal); err != nil {
+		return err
+	}
+
 	cmd := `DECLARE @sql NVARCHAR(max);
           SET @sql = 'ALTER SERVER ROLE ' + QUOTENAME(@role) + ' DROP MEMBER ' + QUOTENAME(@principal);
           EXEC (@sql);`
@@ -431,20 +489,25 @@ func (m client) UnassignServerRole(ctx context.Context, role string, principal s
 
 // Permission operations
 
-func encodePermissionId(grant GrantPermission) string {
-	// Format: database/principal/permission/objecttype/objectname (last two optional)
+func (m client) encodePermissionId(grant GrantPermission) string {
+	// Format: host/database/principal/permission/objecttype/objectname (last two optional)
 	db := grant.Database
 	if db == "" {
-		db = "default"
+		db = m.database
 	}
-	id := fmt.Sprintf("%s/%s/%s", db, grant.Principal, grant.Permission)
+	parts := []string{
+		url.QueryEscape(m.host),
+		url.QueryEscape(db),
+		url.QueryEscape(grant.Principal),
+		url.QueryEscape(grant.Permission),
+	}
 	if grant.ObjectType != "" {
-		id += "/" + grant.ObjectType
+		parts = append(parts, url.QueryEscape(grant.ObjectType))
 		if grant.ObjectName != "" {
-			id += "/" + grant.ObjectName
+			parts = append(parts, url.QueryEscape(grant.ObjectName))
 		}
 	}
-	return id
+	return strings.Join(parts, "/")
 }
 
 func (m client) ReadPermission(ctx context.Context, grant GrantPermission) (GrantPermission, error) {
@@ -546,7 +609,7 @@ func (m client) ReadPermission(ctx context.Context, grant GrantPermission) (Gran
 		}
 	}
 
-	grant.Id = encodePermissionId(grant)
+	grant.Id = m.encodePermissionId(grant)
 	return grant, nil
 }
 
@@ -584,33 +647,65 @@ func (m client) GrantPermission(ctx context.Context, grant GrantPermission) (Gra
 		defer conn.Close()
 	}
 
+	if err := validateIdentifier("principal", grant.Principal); err != nil {
+		return grant, err
+	}
+	if err := validatePermission("permission", grant.Permission); err != nil {
+		return grant, err
+	}
+
 	var query string
+	var args []any
 	if grant.ObjectType != "" && grant.ObjectName != "" {
 		// Object-level grant: GRANT permission ON securable_class::[objectname] TO [principal]
 		// Normalize object type to valid SQL Server securable class (SCHEMA or OBJECT)
 		securableClass := normalizeObjectType(grant.ObjectType)
 		objSchema, objName := splitSchemaObject(grant.ObjectName)
 		if objSchema != "" {
-			query = fmt.Sprintf("GRANT %s ON %s::[%s].[%s] TO [%s]",
-				grant.Permission, securableClass, objSchema, objName, grant.Principal)
-		} else {
-			query = fmt.Sprintf("GRANT %s ON %s::[%s] TO [%s]",
-				grant.Permission, securableClass, objName, grant.Principal)
+			if err := validateIdentifier("object schema", objSchema); err != nil {
+				return grant, err
+			}
 		}
+		if err := validateIdentifier("object name", objName); err != nil {
+			return grant, err
+		}
+
+		var cmdBuilder strings.Builder
+		cmdBuilder.WriteString("DECLARE @sql NVARCHAR(max);\n")
+		cmdBuilder.WriteString("SET @sql = 'GRANT ' + @permission + ' ON ' + @class + '::' + ")
+		if objSchema != "" {
+			cmdBuilder.WriteString("QUOTENAME(@object_schema) + '.' + QUOTENAME(@object_name)")
+			args = append(args, sql.Named("object_schema", objSchema))
+		} else {
+			cmdBuilder.WriteString("QUOTENAME(@object_name)")
+		}
+		cmdBuilder.WriteString(" + ' TO ' + QUOTENAME(@principal);")
+		cmdBuilder.WriteString("\nEXEC (@sql);")
+		args = append(args,
+			sql.Named("permission", grant.Permission),
+			sql.Named("class", securableClass),
+			sql.Named("object_name", objName),
+			sql.Named("principal", grant.Principal),
+		)
+		query = cmdBuilder.String()
 	} else {
 		// Database-level grant
-		query = fmt.Sprintf("GRANT %s TO [%s]", grant.Permission, grant.Principal)
+		query = "DECLARE @sql NVARCHAR(max);\nSET @sql = 'GRANT ' + @permission + ' TO ' + QUOTENAME(@principal);\nEXEC (@sql);"
+		args = append(args,
+			sql.Named("permission", grant.Permission),
+			sql.Named("principal", grant.Principal),
+		)
 	}
 
 	tflog.Debug(ctx, fmt.Sprintf("Granting permission: %s", query))
 
-	_, err = conn.ExecContext(ctx, query)
+	_, err = conn.ExecContext(ctx, query, args...)
 	if err != nil {
 		return grant, fmt.Errorf("failed to execute grant: %v", err)
 	}
 
 	// Store normalized object type in the result
-	grant.Id = encodePermissionId(grant)
+	grant.Id = m.encodePermissionId(grant)
 	return grant, nil
 }
 
@@ -624,26 +719,58 @@ func (m client) RevokePermission(ctx context.Context, grant GrantPermission) err
 		defer conn.Close()
 	}
 
+	if err := validateIdentifier("principal", grant.Principal); err != nil {
+		return err
+	}
+	if err := validatePermission("permission", grant.Permission); err != nil {
+		return err
+	}
+
 	var query string
+	var args []any
 	if grant.ObjectType != "" && grant.ObjectName != "" {
 		// Object-level revoke with normalized securable class
 		securableClass := normalizeObjectType(grant.ObjectType)
 		objSchema, objName := splitSchemaObject(grant.ObjectName)
 		if objSchema != "" {
-			query = fmt.Sprintf("REVOKE %s ON %s::[%s].[%s] FROM [%s] CASCADE",
-				grant.Permission, securableClass, objSchema, objName, grant.Principal)
-		} else {
-			query = fmt.Sprintf("REVOKE %s ON %s::[%s] FROM [%s] CASCADE",
-				grant.Permission, securableClass, objName, grant.Principal)
+			if err := validateIdentifier("object schema", objSchema); err != nil {
+				return err
+			}
 		}
+		if err := validateIdentifier("object name", objName); err != nil {
+			return err
+		}
+
+		var cmdBuilder strings.Builder
+		cmdBuilder.WriteString("DECLARE @sql NVARCHAR(max);\n")
+		cmdBuilder.WriteString("SET @sql = 'REVOKE ' + @permission + ' ON ' + @class + '::' + ")
+		if objSchema != "" {
+			cmdBuilder.WriteString("QUOTENAME(@object_schema) + '.' + QUOTENAME(@object_name)")
+			args = append(args, sql.Named("object_schema", objSchema))
+		} else {
+			cmdBuilder.WriteString("QUOTENAME(@object_name)")
+		}
+		cmdBuilder.WriteString(" + ' FROM ' + QUOTENAME(@principal) + ' CASCADE';")
+		cmdBuilder.WriteString("\nEXEC (@sql);")
+		args = append(args,
+			sql.Named("permission", grant.Permission),
+			sql.Named("class", securableClass),
+			sql.Named("object_name", objName),
+			sql.Named("principal", grant.Principal),
+		)
+		query = cmdBuilder.String()
 	} else {
 		// Database-level revoke
-		query = fmt.Sprintf("REVOKE %s FROM [%s] CASCADE", grant.Permission, grant.Principal)
+		query = "DECLARE @sql NVARCHAR(max);\nSET @sql = 'REVOKE ' + @permission + ' FROM ' + QUOTENAME(@principal) + ' CASCADE';\nEXEC (@sql);"
+		args = append(args,
+			sql.Named("permission", grant.Permission),
+			sql.Named("principal", grant.Principal),
+		)
 	}
 
 	tflog.Debug(ctx, fmt.Sprintf("Revoking permission: %s", query))
 
-	_, err = conn.ExecContext(ctx, query)
+	_, err = conn.ExecContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("failed to execute revoke: %v", err)
 	}
@@ -679,6 +806,10 @@ func (m client) CreateRole(ctx context.Context, database string, name string) (R
 		defer conn.Close()
 	}
 
+	if err := validateIdentifier("role name", name); err != nil {
+		return Role{}, err
+	}
+
 	query := fmt.Sprintf("CREATE ROLE [%s]", name)
 	if _, err := conn.ExecContext(ctx, query); err != nil {
 		return Role{}, err
@@ -701,6 +832,10 @@ func (m client) DeleteRole(ctx context.Context, database string, name string) er
 		defer conn.Close()
 	}
 
+	if err := validateIdentifier("role name", name); err != nil {
+		return err
+	}
+
 	query := fmt.Sprintf("DROP ROLE [%s]", name)
 	tflog.Debug(ctx, fmt.Sprintf("Deleting Role %s", name))
 	_, err = conn.ExecContext(ctx, query)
@@ -709,6 +844,11 @@ func (m client) DeleteRole(ctx context.Context, database string, name string) er
 
 func (m client) GetDatabase(ctx context.Context, name string) (Database, error) {
 	var db Database
+
+	if err := validateIdentifier("database name", name); err != nil {
+		return db, err
+	}
+
 	cmd := `SELECT [name], [database_id] FROM sys.databases WHERE [name] = @name`
 	tflog.Debug(ctx, fmt.Sprintf("Getting database %s", name))
 	result := m.conn.QueryRowContext(ctx, cmd, sql.Named("name", name))
@@ -718,6 +858,11 @@ func (m client) GetDatabase(ctx context.Context, name string) (Database, error) 
 
 func (m client) CreateDatabase(ctx context.Context, name string, collation string) (Database, error) {
 	var db Database
+
+	if err := validateIdentifier("database name", name); err != nil {
+		return db, err
+	}
+
 	var query string
 	if collation != "" {
 		query = fmt.Sprintf("CREATE DATABASE [%s] COLLATE %s", name, collation)
@@ -755,6 +900,20 @@ func (m client) GetLogin(ctx context.Context, name string) (Login, error) {
 
 func (m client) CreateLogin(ctx context.Context, create CreateLogin) (Login, error) {
 	var login Login
+
+	if err := validateIdentifier("login name", create.Name); err != nil {
+		return login, err
+	}
+	if create.DefaultDatabase != "" {
+		if err := validateIdentifier("default database", create.DefaultDatabase); err != nil {
+			return login, err
+		}
+	}
+	if create.DefaultLanguage != "" {
+		if err := validateIdentifier("default language", create.DefaultLanguage); err != nil {
+			return login, err
+		}
+	}
 
 	// Build the CREATE LOGIN command using dynamic SQL for safety
 	var cmdBuilder strings.Builder
@@ -794,6 +953,20 @@ func (m client) CreateLogin(ctx context.Context, create CreateLogin) (Login, err
 func (m client) UpdateLogin(ctx context.Context, update UpdateLogin) (Login, error) {
 	var cmdBuilder strings.Builder
 	var args []any
+
+	if err := validateIdentifier("login name", update.Name); err != nil {
+		return Login{}, err
+	}
+	if update.DefaultDatabase != "" {
+		if err := validateIdentifier("default database", update.DefaultDatabase); err != nil {
+			return Login{}, err
+		}
+	}
+	if update.DefaultLanguage != "" {
+		if err := validateIdentifier("default language", update.DefaultLanguage); err != nil {
+			return Login{}, err
+		}
+	}
 
 	cmdBuilder.WriteString("DECLARE @sql NVARCHAR(max);\n")
 	cmdBuilder.WriteString("SET @sql = 'ALTER LOGIN ' + QUOTENAME(@name)")
@@ -847,6 +1020,10 @@ func (m client) UpdateLogin(ctx context.Context, update UpdateLogin) (Login, err
 }
 
 func (m client) DeleteLogin(ctx context.Context, name string) error {
+	if err := validateIdentifier("login name", name); err != nil {
+		return err
+	}
+
 	cmd := `DECLARE @sql NVARCHAR(max);
           SET @sql = 'IF EXISTS (SELECT 1 FROM sys.server_principals WHERE [name] = ' + QUOTENAME(@name, '''') + ' AND [type] IN (''S'', ''U'', ''G'')) DROP LOGIN ' + QUOTENAME(@name);
           EXEC (@sql);`
@@ -933,6 +1110,10 @@ func (m client) SetDatabaseOptions(ctx context.Context, name string, opts Databa
 	// Build ALTER DATABASE statements for each option
 	// Note: Collation cannot be changed after database creation - it must be set at CREATE DATABASE time
 	// Note: RCSI and snapshot isolation use WITH ROLLBACK IMMEDIATE to handle exclusive access requirement
+
+	if err := validateIdentifier("database name", name); err != nil {
+		return err
+	}
 
 	var errors []string
 
@@ -1038,6 +1219,36 @@ func boolToOnOff(b bool) string {
 	return "OFF"
 }
 
+// Allow letters, digits, underscore, dot, at, hash, dash, backslash, and space
+var identifierRe = regexp.MustCompile(`^[A-Za-z0-9_.@#\\ -]+$`)
+var permissionRe = regexp.MustCompile(`^[A-Za-z0-9_ ]+$`)
+
+func validateIdentifier(field, value string) error {
+	if strings.TrimSpace(value) == "" {
+		return fmt.Errorf("%s cannot be empty", field)
+	}
+	if len(value) > 128 {
+		return fmt.Errorf("%s must be 128 characters or fewer", field)
+	}
+	if !identifierRe.MatchString(value) {
+		return fmt.Errorf("%s contains invalid characters", field)
+	}
+	return nil
+}
+
+func validatePermission(field, value string) error {
+	if strings.TrimSpace(value) == "" {
+		return fmt.Errorf("%s cannot be empty", field)
+	}
+	if len(value) > 128 {
+		return fmt.Errorf("%s must be 128 characters or fewer", field)
+	}
+	if !permissionRe.MatchString(value) {
+		return fmt.Errorf("%s contains invalid characters", field)
+	}
+	return nil
+}
+
 func (m client) GetDatabaseScopedConfigurations(ctx context.Context, name string) ([]DatabaseScopedConfiguration, error) {
 	var configs []DatabaseScopedConfiguration
 
@@ -1051,8 +1262,14 @@ func (m client) GetDatabaseScopedConfigurations(ctx context.Context, name string
 
 	cmd := `SELECT
 		[name],
-		CAST([value] AS NVARCHAR(MAX)) AS value,
-		CAST([value_for_secondary] AS NVARCHAR(MAX)) AS value_for_secondary
+		CASE SQL_VARIANT_PROPERTY([value], 'BaseType')
+			WHEN 'binary' THEN CONVERT(NVARCHAR(MAX), CONVERT(VARBINARY(MAX), [value]), 1)
+			ELSE CONVERT(NVARCHAR(MAX), [value])
+		END AS value,
+		CASE SQL_VARIANT_PROPERTY([value_for_secondary], 'BaseType')
+			WHEN 'binary' THEN CONVERT(NVARCHAR(MAX), CONVERT(VARBINARY(MAX), [value_for_secondary]), 1)
+			ELSE CONVERT(NVARCHAR(MAX), [value_for_secondary])
+		END AS value_for_secondary
 	FROM sys.database_scoped_configurations
 	WHERE [value] IS NOT NULL`
 

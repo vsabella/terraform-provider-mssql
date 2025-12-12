@@ -100,8 +100,10 @@ resource "mssql_role_assignment" "telemetry_state_reader" {
 			"database": schema.StringAttribute{
 				MarkdownDescription: "Target database for database role assignments. If not specified, uses the provider's default database. Ignored when `server_role = true`.",
 				Optional:            true,
+				Computed:            true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
+					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
 		},
@@ -148,9 +150,15 @@ func (r *MssqlRoleAssignmentResource) Create(ctx context.Context, req resource.C
 			return
 		}
 		tflog.Debug(ctx, fmt.Sprintf("Assigned server role %s to principal %s", data.Role.ValueString(), data.Principal.ValueString()))
+		// Database is not applicable for server roles.
+		data.Database = types.StringNull()
 	} else {
 		// Database role assignment
 		database := data.Database.ValueString()
+		if data.Database.IsUnknown() || data.Database.IsNull() || database == "" {
+			database = r.ctx.Database
+			data.Database = types.StringValue(database)
+		}
 		membership, err = r.ctx.Client.AssignRole(ctx, database, data.Role.ValueString(), data.Principal.ValueString())
 		if err != nil {
 			resp.Diagnostics.AddError(
@@ -161,7 +169,13 @@ func (r *MssqlRoleAssignmentResource) Create(ctx context.Context, req resource.C
 		tflog.Debug(ctx, fmt.Sprintf("Assigned database role %s to principal %s in database %s", data.Role.ValueString(), data.Principal.ValueString(), database))
 	}
 
-	data.Id = types.StringValue(membership.Id)
+	// Compute canonical ID using provider ServerID (not the raw mssql client host),
+	// so IDs remain globally unique and consistent across resources.
+	if isServer {
+		data.Id = types.StringValue(fmt.Sprintf("%s/server/%s/%s", r.ctx.ServerID, membership.Role, membership.Member))
+	} else {
+		data.Id = types.StringValue(fmt.Sprintf("%s/db/%s/%s/%s", r.ctx.ServerID, data.Database.ValueString(), membership.Role, membership.Member))
+	}
 	data.ServerRole = types.BoolValue(isServer)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
@@ -186,6 +200,10 @@ func (r *MssqlRoleAssignmentResource) Read(ctx context.Context, req resource.Rea
 	} else {
 		// Database role
 		database := data.Database.ValueString()
+		if data.Database.IsUnknown() || data.Database.IsNull() || database == "" {
+			database = r.ctx.Database
+			data.Database = types.StringValue(database)
+		}
 		membership, err = r.ctx.Client.ReadRoleMembership(ctx, database, data.Role.ValueString(), data.Principal.ValueString())
 	}
 
@@ -197,10 +215,17 @@ func (r *MssqlRoleAssignmentResource) Read(ctx context.Context, req resource.Rea
 		return
 	}
 
-	data.Id = types.StringValue(membership.Id)
+	if isServer {
+		data.Id = types.StringValue(fmt.Sprintf("%s/server/%s/%s", r.ctx.ServerID, membership.Role, membership.Member))
+	} else {
+		data.Id = types.StringValue(fmt.Sprintf("%s/db/%s/%s/%s", r.ctx.ServerID, data.Database.ValueString(), membership.Role, membership.Member))
+	}
 	data.Role = types.StringValue(membership.Role)
 	data.Principal = types.StringValue(membership.Member)
 	data.ServerRole = types.BoolValue(isServer)
+	if isServer {
+		data.Database = types.StringNull()
+	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
@@ -235,6 +260,9 @@ func (r *MssqlRoleAssignmentResource) Delete(ctx context.Context, req resource.D
 		err = r.ctx.Client.UnassignServerRole(ctx, data.Role.ValueString(), data.Principal.ValueString())
 	} else {
 		database := data.Database.ValueString()
+		if database == "" {
+			database = r.ctx.Database
+		}
 		err = r.ctx.Client.UnassignRole(ctx, database, data.Role.ValueString(), data.Principal.ValueString())
 	}
 
@@ -247,51 +275,90 @@ func (r *MssqlRoleAssignmentResource) Delete(ctx context.Context, req resource.D
 }
 
 func (r *MssqlRoleAssignmentResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	// ID format:
-	//   server:role/principal - for server role assignments
-	//   database:role/principal - for database role assignments with specific database
-	//   role/principal - for database role assignments with provider's default database
-	//
-	// role and principal are URL-encoded
+	// Import ID (host + scope):
+	//   Server role:   <server_id>/server/<role>/<principal>
+	//   Database role: <server_id>/db/<database>/<role>/<principal>
+	// role, principal, and database are URL-encoded
 
-	id := req.ID
-	isServer := false
-	database := ""
-
-	// Check for prefix
-	if strings.HasPrefix(id, "server:") {
-		isServer = true
-		id = strings.TrimPrefix(id, "server:")
-	} else if idx := strings.Index(id, ":"); idx > 0 && !strings.Contains(id[:idx], "/") {
-		database = id[:idx]
-		id = id[idx+1:]
-	}
-
-	// Parse role/principal (URL-encoded)
-	parts := strings.SplitN(id, "/", 2)
-	if len(parts) != 2 {
+	parts := strings.Split(req.ID, "/")
+	if len(parts) < 4 {
 		resp.Diagnostics.AddError("Invalid import ID",
-			"Import ID must be in format: [server:|database:]role/principal (role and principal are URL-encoded)")
+			"Import ID must be in format <server_id>/server/<role>/<principal> or <server_id>/db/<database>/<role>/<principal>")
 		return
 	}
 
-	role, err := url.QueryUnescape(parts[0])
+	host := parts[0]
+	scope := parts[1]
+
+	var roleEnc, principalEnc, databaseEnc string
+	isServer := false
+
+	if scope == "server" && len(parts) == 4 {
+		isServer = true
+		roleEnc = parts[2]
+		principalEnc = parts[3]
+	} else if scope == "db" && len(parts) == 5 {
+		databaseEnc = parts[2]
+		roleEnc = parts[3]
+		principalEnc = parts[4]
+	} else {
+		resp.Diagnostics.AddError("Invalid import ID",
+			"Import ID must be in format <server_id>/server/<role>/<principal> or <server_id>/db/<database>/<role>/<principal>")
+		return
+	}
+
+	role, err := url.QueryUnescape(roleEnc)
 	if err != nil {
 		resp.Diagnostics.AddError("Invalid import ID", fmt.Sprintf("Failed to decode role: %s", err))
 		return
 	}
 
-	principal, err := url.QueryUnescape(parts[1])
+	principal, err := url.QueryUnescape(principalEnc)
 	if err != nil {
 		resp.Diagnostics.AddError("Invalid import ID", fmt.Sprintf("Failed to decode principal: %s", err))
 		return
 	}
 
-	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
+	if host == "" {
+		resp.Diagnostics.AddError("Invalid import ID", "Host segment cannot be empty")
+		return
+	}
+
+	if isServer {
+		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("server_role"), true)...)
+	} else {
+		db, err := url.QueryUnescape(databaseEnc)
+		if err != nil {
+			resp.Diagnostics.AddError("Invalid import ID", fmt.Sprintf("Failed to decode database: %s", err))
+			return
+		}
+		if db == "" {
+			resp.Diagnostics.AddError("Invalid import ID", "Database segment cannot be empty for database role assignments")
+			return
+		}
+		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("database"), db)...)
+		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("server_role"), false)...)
+	}
+
+	// Store canonical ID using the provider's configured ServerID (including port).
+	var canonicalID string
+	if isServer {
+		canonicalID = fmt.Sprintf("%s/server/%s/%s", r.ctx.ServerID, role, principal)
+	} else {
+		db := ""
+		if databaseEnc != "" {
+			if decodedDb, derr := url.QueryUnescape(databaseEnc); derr == nil {
+				db = decodedDb
+			}
+		}
+		if db == "" {
+			resp.Diagnostics.AddError("Invalid import ID", "Database segment cannot be empty for database role assignments")
+			return
+		}
+		canonicalID = fmt.Sprintf("%s/db/%s/%s/%s", r.ctx.ServerID, db, role, principal)
+	}
+
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), canonicalID)...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("role"), role)...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("principal"), principal)...)
-	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("server_role"), isServer)...)
-	if database != "" {
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("database"), database)...)
-	}
 }

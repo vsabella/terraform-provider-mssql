@@ -62,8 +62,10 @@ func (r *MssqlUserResource) Schema(ctx context.Context, req resource.SchemaReque
 			"database": schema.StringAttribute{
 				MarkdownDescription: "Target database for the user. If not specified, uses the provider's configured database. Changing this forces a new resource.",
 				Optional:            true,
+				Computed:            true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
+					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
 			"username": schema.StringAttribute{
@@ -149,6 +151,13 @@ func (r *MssqlUserResource) Create(ctx context.Context, req resource.CreateReque
 		return
 	}
 
+	// Resolve effective database (explicit in state for clarity).
+	database := data.Database.ValueString()
+	if data.Database.IsUnknown() || data.Database.IsNull() || database == "" {
+		database = r.ctx.Database
+		data.Database = types.StringValue(database)
+	}
+
 	// Validate mutually exclusive options
 	hasPassword := !data.Password.IsNull() && data.Password.ValueString() != ""
 	hasLoginName := !data.LoginName.IsNull() && data.LoginName.ValueString() != ""
@@ -181,22 +190,24 @@ func (r *MssqlUserResource) Create(ctx context.Context, req resource.CreateReque
 		DefaultSchema: data.DefaultSchema.ValueString(),
 	}
 
-	database := data.Database.ValueString()
 	user, err := r.ctx.Client.CreateUser(ctx, database, create)
 	if err != nil {
 		resp.Diagnostics.AddError(fmt.Sprintf("Error creating user %s", create.Username), err.Error())
 		return
 	}
 
-	userToResource(&data, user)
+	userToResource(&data, user, r.ctx.ServerID, database)
 	tflog.Debug(ctx, fmt.Sprintf("Created user %s", data.Username))
 
 	// Save data into Terraform state
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
-func userToResource(data *MssqlUserResourceModel, user mssql.User) {
-	data.Id = types.StringValue(user.Id)
+func userToResource(data *MssqlUserResourceModel, user mssql.User, serverID, database string) {
+	if database != "" {
+		data.Database = types.StringValue(database)
+	}
+	data.Id = types.StringValue(fmt.Sprintf("%s/%s/%s", serverID, database, user.Username))
 	data.Username = types.StringValue(user.Username)
 
 	if user.Sid != "" {
@@ -216,8 +227,18 @@ func (r *MssqlUserResource) Read(ctx context.Context, req resource.ReadRequest, 
 		return
 	}
 
-	database := data.Database.ValueString()
-	user, err := r.ctx.Client.GetUser(ctx, database, data.Id.ValueString())
+	database, username, err := parseDbScopedId(data.Id.ValueString(), data.Database.ValueString(), "user")
+	if err != nil {
+		resp.Diagnostics.AddError("Invalid user ID", err.Error())
+		return
+	}
+
+	// Resolve effective database (explicit in state for clarity).
+	if database == "" {
+		database = r.ctx.Database
+	}
+
+	user, err := r.ctx.Client.GetUser(ctx, database, username)
 
 	// If resource is not found, remove it from the state
 	if errors.Is(err, sql.ErrNoRows) {
@@ -228,7 +249,7 @@ func (r *MssqlUserResource) Read(ctx context.Context, req resource.ReadRequest, 
 		return
 	}
 
-	userToResource(&data, user)
+	userToResource(&data, user, r.ctx.ServerID, database)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
@@ -242,19 +263,28 @@ func (r *MssqlUserResource) Update(ctx context.Context, req resource.UpdateReque
 	}
 
 	user := mssql.UpdateUser{
-		Id:            data.Id.ValueString(),
+		Id:            usernameFromDbScopedId(data.Id.ValueString()),
 		Password:      data.Password.ValueString(),
 		DefaultSchema: data.DefaultSchema.ValueString(),
 	}
 
-	database := data.Database.ValueString()
+	database, _, err := parseDbScopedId(data.Id.ValueString(), data.Database.ValueString(), "user")
+	if err != nil {
+		resp.Diagnostics.AddError("Invalid user ID", err.Error())
+		return
+	}
+	if database == "" {
+		database = r.ctx.Database
+		data.Database = types.StringValue(database)
+	}
+
 	cur, err := r.ctx.Client.UpdateUser(ctx, database, user)
 	if err != nil {
 		resp.Diagnostics.AddError("could not update user", err.Error())
 		return
 	}
 
-	data.Id = types.StringValue(cur.Id)
+	userToResource(&data, cur, r.ctx.ServerID, database)
 	data.DefaultSchema = types.StringValue(cur.DefaultSchema)
 
 	// Save updated data into Terraform state
@@ -270,8 +300,16 @@ func (r *MssqlUserResource) Delete(ctx context.Context, req resource.DeleteReque
 		return
 	}
 
-	database := data.Database.ValueString()
-	err := r.ctx.Client.DeleteUser(ctx, database, data.Id.ValueString())
+	database, username, err := parseDbScopedId(data.Id.ValueString(), data.Database.ValueString(), "user")
+	if err != nil {
+		resp.Diagnostics.AddError("Invalid user ID", err.Error())
+		return
+	}
+	if database == "" {
+		database = r.ctx.Database
+	}
+
+	err = r.ctx.Client.DeleteUser(ctx, database, username)
 	if err != nil {
 		resp.Diagnostics.AddError("unable to delete user", fmt.Sprintf("unable to delete user %s, got error: %s", data.Username.ValueString(), err))
 		return
@@ -279,17 +317,37 @@ func (r *MssqlUserResource) Delete(ctx context.Context, req resource.DeleteReque
 }
 
 func (r *MssqlUserResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	// ID format: database/username or just username (for provider's default database)
-	parts := strings.SplitN(req.ID, "/", 2)
-
-	if len(parts) == 2 {
-		// database/username format
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("database"), parts[0])...)
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("username"), parts[1])...)
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), parts[1])...)
-	} else {
-		// Just username - uses provider's default database
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("username"), req.ID)...)
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
+	// Import ID must be <server_id>/<database>/<user>
+	db, username, err := parseDbScopedId(req.ID, "", "user")
+	if err != nil {
+		resp.Diagnostics.AddError("Invalid import ID", err.Error())
+		return
 	}
+	// If db is empty, resolve to provider default.
+	if db == "" {
+		db = r.ctx.Database
+	}
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("database"), db)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("username"), username)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), fmt.Sprintf("%s/%s/%s", r.ctx.ServerID, db, username))...)
+}
+
+// parseDbScopedId expects <server_id>/<database>/<name> and returns database/name.
+// If databaseAttr is provided, it overrides the database from the ID.
+func parseDbScopedId(id string, databaseAttr string, kind string) (string, string, error) {
+	parts := strings.Split(id, "/")
+	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+		return "", "", fmt.Errorf("expected id in format <server_id>/<database>/<%s>, got %q", kind, id)
+	}
+	db := parts[1]
+	if databaseAttr != "" {
+		db = databaseAttr
+	}
+	name := parts[2]
+	return db, name, nil
+}
+
+func usernameFromDbScopedId(id string) string {
+	_, name, _ := parseDbScopedId(id, "", "user")
+	return name
 }
