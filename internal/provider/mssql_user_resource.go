@@ -210,6 +210,14 @@ func userToResource(data *MssqlUserResourceModel, user mssql.User, serverID, dat
 	data.Id = types.StringValue(fmt.Sprintf("%s/%s/%s", serverID, database, user.Username))
 	data.Username = types.StringValue(user.Username)
 
+	// Persist login mapping when available so imports don't force a replacement just to populate login_name.
+	// (The login name is readable for login-mapped users, but not derivable from the import ID.)
+	if user.LoginName != "" {
+		data.LoginName = types.StringValue(user.LoginName)
+	} else {
+		data.LoginName = types.StringNull()
+	}
+
 	if user.Sid != "" {
 		data.Sid = types.StringValue(user.Sid)
 	}

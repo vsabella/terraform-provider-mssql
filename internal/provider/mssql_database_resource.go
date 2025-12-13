@@ -330,40 +330,9 @@ func (r *MssqlDatabaseResource) ImportState(ctx context.Context, req resource.Im
 		return
 	}
 
-	// Import scoped configurations (populate state so Terraform can manage/clear them)
-	configObjectType := types.ObjectType{
-		AttrTypes: map[string]attr.Type{
-			"name":                types.StringType,
-			"value":               types.StringType,
-			"value_for_secondary": types.StringType,
-		},
-	}
-	if configs, cfgErr := r.ctx.Client.GetDatabaseScopedConfigurations(ctx, db.Name); cfgErr == nil {
-		var values []attr.Value
-		for _, cfg := range configs {
-			attrs := map[string]attr.Value{
-				"name":  types.StringValue(cfg.Name),
-				"value": types.StringValue(cfg.Value),
-			}
-			if cfg.ValueForSecondary != "" {
-				attrs["value_for_secondary"] = types.StringValue(cfg.ValueForSecondary)
-			} else {
-				attrs["value_for_secondary"] = types.StringNull()
-			}
-			obj, objDiags := types.ObjectValue(configObjectType.AttrTypes, attrs)
-			if objDiags.HasError() {
-				resp.Diagnostics.Append(objDiags...)
-				return
-			}
-			values = append(values, obj)
-		}
-		setVal, setDiags := types.SetValue(configObjectType, values)
-		if setDiags.HasError() {
-			resp.Diagnostics.Append(setDiags...)
-			return
-		}
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("scoped_configuration"), setVal)...)
-	}
+	// Do NOT import all existing scoped configurations into state.
+	// We only want to manage the scoped_configuration blocks explicitly declared in config.
+	// Importing the full server view here can cause Terraform to plan clearing unrelated settings.
 
 	// Set basic attributes
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), fmt.Sprintf("%s/%s", r.ctx.ServerID, db.Name))...)

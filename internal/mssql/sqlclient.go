@@ -213,12 +213,14 @@ func (m client) getUserWithConn(ctx context.Context, conn *sql.DB, username stri
     P.[name] AS name,
     P.[type] AS type,
     CASE WHEN P.[type] IN ('E', 'X') THEN 1 ELSE 0 END AS ext,
-    COALESCE(P.[default_schema_name], '') AS default_schema_name
+    COALESCE(P.[default_schema_name], '') AS default_schema_name,
+    COALESCE(SP.[name], '') AS login_name
 FROM sys.database_principals P
+LEFT JOIN sys.server_principals SP ON P.[sid] = SP.[sid]
 WHERE P.[name] = @username`
 
 	result := conn.QueryRowContext(ctx, cmd, sql.Named("username", username))
-	err := result.Scan(&user.Id, &user.Sid, &user.Username, &user.Type, &user.External, &user.DefaultSchema)
+	err := result.Scan(&user.Id, &user.Sid, &user.Username, &user.Type, &user.External, &user.DefaultSchema, &user.LoginName)
 	return user, err
 }
 
@@ -1208,7 +1210,9 @@ func (m client) SetDatabaseOptions(ctx context.Context, name string, opts Databa
 
 	// Accelerated database recovery (SQL Server 2019+, Azure SQL)
 	if opts.AcceleratedDatabaseRecovery != nil {
-		stmt := fmt.Sprintf("ALTER DATABASE [%s] SET ACCELERATED_DATABASE_RECOVERY = %s", name, boolToOnOff(*opts.AcceleratedDatabaseRecovery))
+		// Like READ_COMMITTED_SNAPSHOT, enabling/disabling ADR can require waiting for locks.
+		// Use WITH ROLLBACK IMMEDIATE to avoid long blocks during bootstrap/migrations.
+		stmt := fmt.Sprintf("ALTER DATABASE [%s] SET ACCELERATED_DATABASE_RECOVERY = %s WITH ROLLBACK IMMEDIATE", name, boolToOnOff(*opts.AcceleratedDatabaseRecovery))
 		tflog.Debug(ctx, fmt.Sprintf("Setting database option: %s", stmt))
 		if _, err := m.conn.ExecContext(ctx, stmt); err != nil {
 			errors = append(errors, fmt.Sprintf("ACCELERATED_DATABASE_RECOVERY: %v", err))
