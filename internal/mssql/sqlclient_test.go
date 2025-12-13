@@ -156,7 +156,8 @@ func Test_CreateDatabase(t *testing.T) {
 	if password == "" {
 		t.Fatalf("MSSQL_SA_PASSWORD environment variable is not set. Start the local MSSQL test DB and export env (e.g. `task db:up` and ensure MSSQL_SA_PASSWORD is set) before running tests.")
 	}
-	c := NewClient("localhost", 1433, "master", "sa", password).(client)
+	// Use 127.0.0.1 instead of localhost to avoid IPv6 ::1 resolution issues on some systems.
+	c := NewClient("127.0.0.1", 1433, "master", "sa", password).(client)
 	ctx := context.Background()
 
 	t.Run("Create valid database", func(t *testing.T) {
