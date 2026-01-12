@@ -317,29 +317,78 @@ func (m client) ReadDatabasePermission(ctx context.Context, id string) (Database
 func (m client) GrantDatabasePermission(ctx context.Context, principal string, permission string) (DatabaseGrantPermission, error) {
 	var DatabaseGrantPermission DatabaseGrantPermission
 
-	query := fmt.Sprintf("GRANT %s TO %s", permission, principal)
+	perm, err := normalizeDatabasePermission(permission)
+	if err != nil {
+		return DatabaseGrantPermission, err
+	}
+	principal, err = normalizePrincipalName(principal)
+	if err != nil {
+		return DatabaseGrantPermission, err
+	}
 
-	tflog.Debug(ctx, fmt.Sprintf("Granting permission %s to %s [%s]", permission, principal, query))
+	cmd := `DECLARE @sql NVARCHAR(max);
+SET @sql = N'GRANT ' + @p1 + N' TO ' + QUOTENAME(@p2) + N';';
+EXEC (@sql);`
 
-	_, err := m.conn.ExecContext(ctx, query)
+	tflog.Debug(ctx, fmt.Sprintf("Granting permission %s to %s", perm, principal))
+
+	_, err = m.conn.ExecContext(ctx, cmd, perm, principal)
 	if err != nil {
 		return DatabaseGrantPermission, fmt.Errorf("failed to execute grant query: %v", err)
 	}
 
-	return m.ReadDatabasePermission(ctx, fmt.Sprintf("%s/%s", principal, strings.ToUpper(permission)))
+	return m.ReadDatabasePermission(ctx, fmt.Sprintf("%s/%s", principal, perm))
 }
 
 func (m client) RevokeDatabasePermission(ctx context.Context, principal string, permission string) error {
-	query := fmt.Sprintf("REVOKE %s TO %s CASCADE", permission, principal)
+	perm, err := normalizeDatabasePermission(permission)
+	if err != nil {
+		return err
+	}
+	principal, err = normalizePrincipalName(principal)
+	if err != nil {
+		return err
+	}
 
-	tflog.Debug(ctx, fmt.Sprintf("Revoking permission %s from user %s", permission, principal))
+	cmd := `DECLARE @sql NVARCHAR(max);
+SET @sql = N'REVOKE ' + @p1 + N' FROM ' + QUOTENAME(@p2) + N' CASCADE;';
+EXEC (@sql);`
 
-	_, err := m.conn.ExecContext(ctx, query)
+	tflog.Debug(ctx, fmt.Sprintf("Revoking permission %s from user %s", perm, principal))
+
+	_, err = m.conn.ExecContext(ctx, cmd, perm, principal)
 	if err != nil {
 		return fmt.Errorf("failed to execute revoke query: %v", err)
 	}
 
 	return nil
+}
+
+func normalizePrincipalName(principal string) (string, error) {
+	p := strings.TrimSpace(principal)
+	if p == "" {
+		return "", fmt.Errorf("principal must not be empty")
+	}
+	// SQL Server principal names are sysname (<= 128 characters).
+	if len(p) > 128 {
+		return "", fmt.Errorf("principal must be <= 128 characters")
+	}
+	return p, nil
+}
+
+func normalizeDatabasePermission(permission string) (string, error) {
+	p := strings.ToUpper(strings.TrimSpace(permission))
+	if p == "" {
+		return "", fmt.Errorf("permission must not be empty")
+	}
+	// Permission is interpolated as a keyword into dynamic SQL, so restrict it to safe tokens.
+	for _, r := range p {
+		if (r >= 'A' && r <= 'Z') || r == '_' || r == ' ' {
+			continue
+		}
+		return "", fmt.Errorf("invalid permission %q: only letters, spaces, and underscores are allowed", permission)
+	}
+	return p, nil
 }
 
 func (m client) GetRole(ctx context.Context, name string) (Role, error) {

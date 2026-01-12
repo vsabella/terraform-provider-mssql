@@ -3,12 +3,21 @@
 page_title: "mssql_grant Resource - mssql"
 subcategory: ""
 description: |-
-  DB grant resource
+  Grants a database-level permission to a database principal.
 ---
 
 # mssql_grant (Resource)
 
-DB grant resource
+Grants a database-level permission to a database principal.
+
+## Example
+
+```hcl
+resource "mssql_grant" "create_proc" {
+  principal  = "app_user"
+  permission = "CREATE PROCEDURE"
+}
+```
 
 
 
