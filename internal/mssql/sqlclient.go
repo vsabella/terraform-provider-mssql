@@ -590,7 +590,7 @@ func (m *client) CreateDatabase(ctx context.Context, name string) (Database, err
 	return db, err
 }
 
-func (m client) ExecScript(ctx context.Context, database string, script string) error {
+func (m *client) ExecScript(ctx context.Context, database string, script string) error {
 	db := strings.TrimSpace(database)
 	if db == "" {
 		// No explicit database requested; execute as-is in the current connection context.
@@ -616,4 +616,168 @@ EXEC (@sql);`
 	}
 
 	return nil
+}
+
+func validateIdentifier(kind string, value string) error {
+	v := strings.TrimSpace(value)
+	if v == "" {
+		return fmt.Errorf("invalid %s: must not be empty", kind)
+	}
+	// SQL Server identifiers are sysname (<= 128 characters).
+	if len(v) > 128 {
+		return fmt.Errorf("invalid %s: must be <= 128 characters", kind)
+	}
+	return nil
+}
+
+// Login operations.
+
+func (m *client) GetLogin(ctx context.Context, name string) (Login, error) {
+	var login Login
+
+	cmd := `SELECT
+		p.[name] AS name,
+		COALESCE(l.[default_database_name], 'master') AS default_database,
+		COALESCE(l.[default_language_name], '') AS default_language,
+		p.[is_disabled] AS is_disabled
+	FROM sys.server_principals p
+	LEFT JOIN sys.sql_logins l ON p.principal_id = l.principal_id
+	WHERE p.[name] = @name AND p.[type] IN ('S', 'U', 'G')`
+
+	tflog.Debug(ctx, fmt.Sprintf("Executing query for login %s: %s", name, cmd))
+	result := m.conn.QueryRowContext(ctx, cmd, sql.Named("name", name))
+
+	err := result.Scan(&login.Name, &login.DefaultDatabase, &login.DefaultLanguage, &login.IsDisabled)
+	return login, err
+}
+
+func (m *client) CreateLogin(ctx context.Context, create CreateLogin) (Login, error) {
+	var login Login
+
+	if err := validateIdentifier("login name", create.Name); err != nil {
+		return login, err
+	}
+	if create.Password == "" {
+		return login, fmt.Errorf("invalid login password: must not be empty")
+	}
+	if create.DefaultDatabase != "" {
+		if err := validateIdentifier("default database", create.DefaultDatabase); err != nil {
+			return login, err
+		}
+	}
+	if create.DefaultLanguage != "" {
+		if err := validateIdentifier("default language", create.DefaultLanguage); err != nil {
+			return login, err
+		}
+	}
+
+	// Build the CREATE LOGIN command using dynamic SQL for safety
+	var cmdBuilder strings.Builder
+	var args []any
+
+	cmdBuilder.WriteString("DECLARE @sql NVARCHAR(max);\n")
+	cmdBuilder.WriteString("SET @sql = 'CREATE LOGIN ' + QUOTENAME(@name) + ' WITH PASSWORD = ' + QUOTENAME(@password, '''')")
+	args = append(args, sql.Named("name", create.Name))
+	args = append(args, sql.Named("password", create.Password))
+
+	if create.DefaultDatabase != "" {
+		cmdBuilder.WriteString(" + ', DEFAULT_DATABASE = ' + QUOTENAME(@default_database)")
+		args = append(args, sql.Named("default_database", create.DefaultDatabase))
+	}
+	if create.DefaultLanguage != "" {
+		cmdBuilder.WriteString(" + ', DEFAULT_LANGUAGE = ' + QUOTENAME(@default_language)")
+		args = append(args, sql.Named("default_language", create.DefaultLanguage))
+	}
+
+	cmdBuilder.WriteString(";\n")
+	cmdBuilder.WriteString("EXEC (@sql);")
+
+	cmd := cmdBuilder.String()
+	tflog.Debug(ctx, fmt.Sprintf("Creating login %s: %s", create.Name, cmd))
+
+	_, err := m.conn.ExecContext(ctx, cmd, args...)
+	if err != nil {
+		return login, fmt.Errorf("failed to create login: %v", err)
+	}
+
+	return m.GetLogin(ctx, create.Name)
+}
+
+func (m *client) UpdateLogin(ctx context.Context, update UpdateLogin) (Login, error) {
+	if err := validateIdentifier("login name", update.Name); err != nil {
+		return Login{}, err
+	}
+	if update.DefaultDatabase != "" {
+		if err := validateIdentifier("default database", update.DefaultDatabase); err != nil {
+			return Login{}, err
+		}
+	}
+	if update.DefaultLanguage != "" {
+		if err := validateIdentifier("default language", update.DefaultLanguage); err != nil {
+			return Login{}, err
+		}
+	}
+
+	var cmdBuilder strings.Builder
+	var args []any
+
+	cmdBuilder.WriteString("DECLARE @sql NVARCHAR(max);\n")
+	cmdBuilder.WriteString("SET @sql = 'ALTER LOGIN ' + QUOTENAME(@name)")
+	args = append(args, sql.Named("name", update.Name))
+
+	hasChanges := false
+
+	if update.Password != "" {
+		cmdBuilder.WriteString(" + ' WITH PASSWORD = ' + QUOTENAME(@password, '''')")
+		args = append(args, sql.Named("password", update.Password))
+		hasChanges = true
+	}
+
+	if update.DefaultDatabase != "" {
+		if hasChanges {
+			cmdBuilder.WriteString(" + ', DEFAULT_DATABASE = ' + QUOTENAME(@default_database)")
+		} else {
+			cmdBuilder.WriteString(" + ' WITH DEFAULT_DATABASE = ' + QUOTENAME(@default_database)")
+		}
+		args = append(args, sql.Named("default_database", update.DefaultDatabase))
+		hasChanges = true
+	}
+
+	if update.DefaultLanguage != "" {
+		if hasChanges {
+			cmdBuilder.WriteString(" + ', DEFAULT_LANGUAGE = ' + QUOTENAME(@default_language)")
+		} else {
+			cmdBuilder.WriteString(" + ' WITH DEFAULT_LANGUAGE = ' + QUOTENAME(@default_language)")
+		}
+		args = append(args, sql.Named("default_language", update.DefaultLanguage))
+		hasChanges = true
+	}
+
+	if hasChanges {
+		cmdBuilder.WriteString(";\n")
+		cmdBuilder.WriteString("EXEC (@sql);")
+
+		cmd := cmdBuilder.String()
+		tflog.Debug(ctx, fmt.Sprintf("Updating login %s: %s", update.Name, cmd))
+
+		if _, err := m.conn.ExecContext(ctx, cmd, args...); err != nil {
+			return Login{}, fmt.Errorf("failed to update login: %v", err)
+		}
+	}
+
+	return m.GetLogin(ctx, update.Name)
+}
+
+func (m *client) DeleteLogin(ctx context.Context, name string) error {
+	if err := validateIdentifier("login name", name); err != nil {
+		return err
+	}
+
+	cmd := `DECLARE @sql NVARCHAR(max);
+SET @sql = 'IF EXISTS (SELECT 1 FROM sys.server_principals WHERE [name] = ' + QUOTENAME(@name, '''') + ' AND [type] IN (''S'', ''U'', ''G'')) DROP LOGIN ' + QUOTENAME(@name);
+EXEC (@sql);`
+
+	tflog.Debug(ctx, fmt.Sprintf("Deleting login %s: %s", name, cmd))
+	_, err := m.conn.ExecContext(ctx, cmd, sql.Named("name", name))
+	return err
 }
