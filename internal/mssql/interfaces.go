@@ -22,6 +22,10 @@ type SqlClient interface {
 	GetDatabase(ctx context.Context, name string) (Database, error)
 	GetDatabaseById(ctx context.Context, id int64) (Database, error)
 	CreateDatabase(ctx context.Context, name string) (Database, error)
+
+	// ExecScript executes an arbitrary SQL script in the specified database.
+	// If database is empty, the provider's configured database is used.
+	ExecScript(ctx context.Context, database string, script string) error
 }
 
 type User struct {
