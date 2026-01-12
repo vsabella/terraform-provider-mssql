@@ -169,15 +169,15 @@ func (r *MssqlUserResource) Create(ctx context.Context, req resource.CreateReque
 		return
 	}
 
-	userToResource(&data, database, user)
+	userToResource(&data, r.ctx.ServerID, database, user)
 	tflog.Debug(ctx, fmt.Sprintf("Created user %s", data.Username))
 
 	// Save data into Terraform state
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
-func userToResource(data *MssqlUserResourceModel, database string, user mssql.User) {
-	data.Id = types.StringValue(fmt.Sprintf("%s/%s", database, user.Username))
+func userToResource(data *MssqlUserResourceModel, serverID string, database string, user mssql.User) {
+	data.Id = types.StringValue(fmt.Sprintf("%s/%s/%s", serverID, database, user.Username))
 	data.Database = types.StringValue(database)
 	data.Username = types.StringValue(user.Username)
 
@@ -206,7 +206,25 @@ func (r *MssqlUserResource) Read(ctx context.Context, req resource.ReadRequest, 
 
 	database := data.Database.ValueString()
 	if data.Database.IsUnknown() || data.Database.IsNull() || database == "" {
-		database = r.ctx.Database
+		if id := data.Id.ValueString(); id != "" {
+			parts := strings.Split(id, "/")
+			switch len(parts) {
+			case 2:
+				if parts[0] == r.ctx.ServerID {
+					database = r.ctx.Database
+					data.Username = types.StringValue(parts[1])
+				} else {
+					database = parts[0]
+					data.Username = types.StringValue(parts[1])
+				}
+			case 3:
+				database = parts[1]
+				data.Username = types.StringValue(parts[2])
+			}
+		}
+		if database == "" {
+			database = r.ctx.Database
+		}
 	}
 
 	user, err := r.ctx.Client.GetUser(ctx, database, data.Username.ValueString())
@@ -220,7 +238,7 @@ func (r *MssqlUserResource) Read(ctx context.Context, req resource.ReadRequest, 
 		return
 	}
 
-	userToResource(&data, database, user)
+	userToResource(&data, r.ctx.ServerID, database, user)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
@@ -251,7 +269,8 @@ func (r *MssqlUserResource) Update(ctx context.Context, req resource.UpdateReque
 		return
 	}
 
-	data.Id = types.StringValue(fmt.Sprintf("%s/%s", database, cur.Username))
+	data.Id = types.StringValue(fmt.Sprintf("%s/%s/%s", r.ctx.ServerID, database, cur.Username))
+	data.Database = types.StringValue(database)
 	data.DefaultSchema = types.StringValue(cur.DefaultSchema)
 
 	// Save updated data into Terraform state
@@ -269,7 +288,25 @@ func (r *MssqlUserResource) Delete(ctx context.Context, req resource.DeleteReque
 
 	database := data.Database.ValueString()
 	if data.Database.IsUnknown() || data.Database.IsNull() || database == "" {
-		database = r.ctx.Database
+		if id := data.Id.ValueString(); id != "" {
+			parts := strings.Split(id, "/")
+			switch len(parts) {
+			case 2:
+				if parts[0] == r.ctx.ServerID {
+					database = r.ctx.Database
+					data.Username = types.StringValue(parts[1])
+				} else {
+					database = parts[0]
+					data.Username = types.StringValue(parts[1])
+				}
+			case 3:
+				database = parts[1]
+				data.Username = types.StringValue(parts[2])
+			}
+		}
+		if database == "" {
+			database = r.ctx.Database
+		}
 	}
 
 	err := r.ctx.Client.DeleteUser(ctx, database, data.Username.ValueString())
@@ -283,19 +320,37 @@ func (r *MssqlUserResource) ImportState(ctx context.Context, req resource.Import
 	// Import formats:
 	// - <username> (uses provider database)
 	// - <database>/<username>
+	// - <server_id>/<username>
+	// - <server_id>/<database>/<username>
 	parts := strings.Split(req.ID, "/")
-	if len(parts) == 1 {
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("database"), r.ctx.Database)...)
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("username"), parts[0])...)
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), fmt.Sprintf("%s/%s", r.ctx.Database, parts[0]))...)
-		return
-	}
-	if len(parts) == 2 && parts[0] != "" && parts[1] != "" {
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("database"), parts[0])...)
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("username"), parts[1])...)
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
+	var database, username string
+
+	switch len(parts) {
+	case 1:
+		database = r.ctx.Database
+		username = parts[0]
+	case 2:
+		if parts[0] == r.ctx.ServerID {
+			database = r.ctx.Database
+			username = parts[1]
+		} else {
+			database = parts[0]
+			username = parts[1]
+		}
+	case 3:
+		database = parts[1]
+		username = parts[2]
+	default:
+		resp.Diagnostics.AddError("Invalid import ID", "expected <username>, <database>/<username>, <server_id>/<username>, or <server_id>/<database>/<username>")
 		return
 	}
 
-	resp.Diagnostics.AddError("Invalid import ID", "expected <username> or <database>/<username>")
+	if database == "" || username == "" {
+		resp.Diagnostics.AddError("Invalid import ID", "database and username must not be empty")
+		return
+	}
+
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("database"), database)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("username"), username)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), fmt.Sprintf("%s/%s/%s", r.ctx.ServerID, database, username))...)
 }

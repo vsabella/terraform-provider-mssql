@@ -89,7 +89,7 @@ func (r *MssqlRoleAssignmentResource) Configure(ctx context.Context, req resourc
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected Resource Configure Type",
-			fmt.Sprintf("Expected *core.SqlClient, got: %T. Please report this issue to the provider developers.", req.ProviderData),
+			fmt.Sprintf("Expected *core.ProviderData, got: %T. Please report this issue to the provider developers.", req.ProviderData),
 		)
 
 		return
@@ -120,7 +120,7 @@ func (r *MssqlRoleAssignmentResource) Create(ctx context.Context, req resource.C
 		return
 	}
 
-	data.Id = types.StringValue(fmt.Sprintf("%s/%s", database, membership.Id))
+	data.Id = types.StringValue(fmt.Sprintf("%s/%s/%s", r.ctx.ServerID, database, membership.Id))
 	data.Role = types.StringValue(membership.Role)
 	data.Principal = types.StringValue(membership.Member)
 	tflog.Debug(ctx, fmt.Sprintf("Assigned role %s to principal %s with id %s", data.Role, data.Principal, data.Id))
@@ -140,13 +140,21 @@ func (r *MssqlRoleAssignmentResource) Read(ctx context.Context, req resource.Rea
 
 	database := data.Database.ValueString()
 	membershipID := data.Id.ValueString()
-	if db, rest, found := strings.Cut(membershipID, "/"); found {
-		// If id is <database>/<encoded_membership_id>, prefer parsing it.
-		if database == "" {
-			database = db
-			data.Database = types.StringValue(database)
+	if membershipID != "" {
+		parts := strings.Split(membershipID, "/")
+		if len(parts) >= 3 && parts[0] == r.ctx.ServerID {
+			if database == "" {
+				database = parts[1]
+				data.Database = types.StringValue(database)
+			}
+			membershipID = strings.Join(parts[2:], "/")
+		} else if len(parts) >= 2 {
+			if database == "" {
+				database = parts[0]
+				data.Database = types.StringValue(database)
+			}
+			membershipID = strings.Join(parts[1:], "/")
 		}
-		membershipID = rest
 	}
 	if database == "" {
 		database = r.ctx.Database
@@ -163,7 +171,7 @@ func (r *MssqlRoleAssignmentResource) Read(ctx context.Context, req resource.Rea
 		return
 	}
 
-	data.Id = types.StringValue(fmt.Sprintf("%s/%s", database, membership.Id))
+	data.Id = types.StringValue(fmt.Sprintf("%s/%s/%s", r.ctx.ServerID, database, membership.Id))
 	data.Database = types.StringValue(database)
 	data.Role = types.StringValue(membership.Role)
 	data.Principal = types.StringValue(membership.Member)
@@ -193,7 +201,28 @@ func (r *MssqlRoleAssignmentResource) Delete(ctx context.Context, req resource.D
 
 	database := data.Database.ValueString()
 	if data.Database.IsUnknown() || data.Database.IsNull() || database == "" {
-		database = r.ctx.Database
+		if id := data.Id.ValueString(); id != "" {
+			parts := strings.Split(id, "/")
+			switch len(parts) {
+			case 3:
+				if parts[0] == r.ctx.ServerID {
+					database = r.ctx.Database
+					data.Role = types.StringValue(parts[1])
+					data.Principal = types.StringValue(parts[2])
+				} else {
+					database = parts[0]
+					data.Role = types.StringValue(parts[1])
+					data.Principal = types.StringValue(parts[2])
+				}
+			case 4:
+				database = parts[1]
+				data.Role = types.StringValue(parts[2])
+				data.Principal = types.StringValue(parts[3])
+			}
+		}
+		if database == "" {
+			database = r.ctx.Database
+		}
 	}
 
 	err := r.ctx.Client.UnassignRole(ctx, database, data.Role.ValueString(), data.Principal.ValueString())
@@ -207,21 +236,42 @@ func (r *MssqlRoleAssignmentResource) ImportState(ctx context.Context, req resou
 	// Import formats:
 	// - <role>/<principal> (uses provider database)
 	// - <database>/<role>/<principal>
+	// - <server_id>/<role>/<principal>
+	// - <server_id>/<database>/<role>/<principal>
 	parts := strings.Split(req.ID, "/")
-	if len(parts) == 2 && parts[0] != "" && parts[1] != "" {
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("database"), r.ctx.Database)...)
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("role"), parts[0])...)
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("principal"), parts[1])...)
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), fmt.Sprintf("%s/%s/%s", r.ctx.Database, parts[0], parts[1]))...)
-		return
-	}
-	if len(parts) == 3 && parts[0] != "" && parts[1] != "" && parts[2] != "" {
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("database"), parts[0])...)
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("role"), parts[1])...)
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("principal"), parts[2])...)
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), fmt.Sprintf("%s/%s/%s", parts[0], parts[1], parts[2]))...)
+	var database, role, principal string
+
+	switch len(parts) {
+	case 2:
+		database = r.ctx.Database
+		role = parts[0]
+		principal = parts[1]
+	case 3:
+		if parts[0] == r.ctx.ServerID {
+			database = r.ctx.Database
+			role = parts[1]
+			principal = parts[2]
+		} else {
+			database = parts[0]
+			role = parts[1]
+			principal = parts[2]
+		}
+	case 4:
+		database = parts[1]
+		role = parts[2]
+		principal = parts[3]
+	default:
+		resp.Diagnostics.AddError("Invalid import ID", "expected <role>/<principal>, <database>/<role>/<principal>, <server_id>/<role>/<principal>, or <server_id>/<database>/<role>/<principal>")
 		return
 	}
 
-	resp.Diagnostics.AddError("Invalid import ID", "expected <role>/<principal> or <database>/<role>/<principal>")
+	if database == "" || role == "" || principal == "" {
+		resp.Diagnostics.AddError("Invalid import ID", "database, role, and principal must not be empty")
+		return
+	}
+
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("database"), database)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("role"), role)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("principal"), principal)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), fmt.Sprintf("%s/%s/%s/%s", r.ctx.ServerID, database, role, principal))...)
 }

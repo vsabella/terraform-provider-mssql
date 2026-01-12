@@ -114,7 +114,7 @@ func (r *MssqlRoleResource) Create(ctx context.Context, req resource.CreateReque
 		return
 	}
 
-	data.Id = types.StringValue(fmt.Sprintf("%s/%s", database, role.Name))
+	data.Id = types.StringValue(fmt.Sprintf("%s/%s/%s", r.ctx.ServerID, database, role.Name))
 	data.Name = types.StringValue(role.Name)
 	tflog.Debug(ctx, fmt.Sprintf("Created role %s", data.Id))
 
@@ -144,7 +144,25 @@ func (r *MssqlRoleResource) Read(ctx context.Context, req resource.ReadRequest, 
 
 	database := data.Database.ValueString()
 	if data.Database.IsUnknown() || data.Database.IsNull() || database == "" {
-		database = r.ctx.Database
+		if id := data.Id.ValueString(); id != "" {
+			parts := strings.Split(id, "/")
+			switch len(parts) {
+			case 2:
+				if parts[0] == r.ctx.ServerID {
+					database = r.ctx.Database
+					data.Name = types.StringValue(parts[1])
+				} else {
+					database = parts[0]
+					data.Name = types.StringValue(parts[1])
+				}
+			case 3:
+				database = parts[1]
+				data.Name = types.StringValue(parts[2])
+			}
+		}
+		if database == "" {
+			database = r.ctx.Database
+		}
 	}
 
 	role, err := r.ctx.Client.GetRole(ctx, database, data.Name.ValueString())
@@ -158,7 +176,7 @@ func (r *MssqlRoleResource) Read(ctx context.Context, req resource.ReadRequest, 
 		return
 	}
 
-	data.Id = types.StringValue(fmt.Sprintf("%s/%s", database, role.Name))
+	data.Id = types.StringValue(fmt.Sprintf("%s/%s/%s", r.ctx.ServerID, database, role.Name))
 	data.Database = types.StringValue(database)
 	data.Name = types.StringValue(role.Name)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
@@ -175,7 +193,25 @@ func (r *MssqlRoleResource) Delete(ctx context.Context, req resource.DeleteReque
 
 	database := data.Database.ValueString()
 	if data.Database.IsUnknown() || data.Database.IsNull() || database == "" {
-		database = r.ctx.Database
+		if id := data.Id.ValueString(); id != "" {
+			parts := strings.Split(id, "/")
+			switch len(parts) {
+			case 2:
+				if parts[0] == r.ctx.ServerID {
+					database = r.ctx.Database
+					data.Name = types.StringValue(parts[1])
+				} else {
+					database = parts[0]
+					data.Name = types.StringValue(parts[1])
+				}
+			case 3:
+				database = parts[1]
+				data.Name = types.StringValue(parts[2])
+			}
+		}
+		if database == "" {
+			database = r.ctx.Database
+		}
 	}
 
 	err := r.ctx.Client.DeleteRole(ctx, database, data.Name.ValueString())
@@ -189,19 +225,37 @@ func (r *MssqlRoleResource) ImportState(ctx context.Context, req resource.Import
 	// Import formats:
 	// - <role> (uses provider database)
 	// - <database>/<role>
+	// - <server_id>/<role>
+	// - <server_id>/<database>/<role>
 	parts := strings.Split(req.ID, "/")
-	if len(parts) == 1 {
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("database"), r.ctx.Database)...)
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("name"), parts[0])...)
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), fmt.Sprintf("%s/%s", r.ctx.Database, parts[0]))...)
-		return
-	}
-	if len(parts) == 2 && parts[0] != "" && parts[1] != "" {
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("database"), parts[0])...)
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("name"), parts[1])...)
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
+	var database, name string
+
+	switch len(parts) {
+	case 1:
+		database = r.ctx.Database
+		name = parts[0]
+	case 2:
+		if parts[0] == r.ctx.ServerID {
+			database = r.ctx.Database
+			name = parts[1]
+		} else {
+			database = parts[0]
+			name = parts[1]
+		}
+	case 3:
+		database = parts[1]
+		name = parts[2]
+	default:
+		resp.Diagnostics.AddError("Invalid import ID", "expected <role>, <database>/<role>, <server_id>/<role>, or <server_id>/<database>/<role>")
 		return
 	}
 
-	resp.Diagnostics.AddError("Invalid import ID", "expected <role> or <database>/<role>")
+	if database == "" || name == "" {
+		resp.Diagnostics.AddError("Invalid import ID", "database and role name must not be empty")
+		return
+	}
+
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("database"), database)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("name"), name)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), fmt.Sprintf("%s/%s/%s", r.ctx.ServerID, database, name))...)
 }

@@ -38,40 +38,58 @@ type MssqlGrantResourceModel struct {
 	Principal  types.String `tfsdk:"principal"`
 }
 
-func encodeGrantId(database, principal, permission string) string {
+func encodeGrantId(serverID, database, principal, permission string) string {
 	// Store permission in lower-case for stability, but encode it to be safe in IDs.
 	return fmt.Sprintf(
-		"%s/%s/%s",
+		"%s/%s/%s/%s",
+		url.QueryEscape(serverID),
 		url.QueryEscape(database),
 		url.QueryEscape(principal),
 		url.QueryEscape(strings.ToLower(permission)),
 	)
 }
 
-func decodeGrantId(id string) (string, string, string, error) {
-	dbEnc, rest, found := strings.Cut(id, "/")
-	if !found {
-		return "", "", "", fmt.Errorf("expected id in format <database>/<principal>/<permission>, got %q", id)
-	}
-	prEnc, permEnc, found := strings.Cut(rest, "/")
-	if !found {
-		return "", "", "", fmt.Errorf("expected id in format <database>/<principal>/<permission>, got %q", id)
+func decodeGrantId(id string) (string, string, string, string, error) {
+	parts := strings.Split(id, "/")
+	if len(parts) != 3 && len(parts) != 4 {
+		return "", "", "", "", fmt.Errorf("expected id in format <database>/<principal>/<permission> or <server_id>/<database>/<principal>/<permission>, got %q", id)
 	}
 
+	offset := 0
+	if len(parts) == 4 {
+		offset = 1
+	}
+
+	serverEnc := ""
+	if len(parts) == 4 {
+		serverEnc = parts[0]
+	}
+	dbEnc := parts[offset]
+	prEnc := parts[offset+1]
+	permEnc := parts[offset+2]
+
+	serverID := ""
+	if serverEnc != "" {
+		var err error
+		serverID, err = url.QueryUnescape(serverEnc)
+		if err != nil {
+			return "", "", "", "", err
+		}
+	}
 	db, err := url.QueryUnescape(dbEnc)
 	if err != nil {
-		return "", "", "", err
+		return "", "", "", "", err
 	}
 	principal, err := url.QueryUnescape(prEnc)
 	if err != nil {
-		return "", "", "", err
+		return "", "", "", "", err
 	}
 	perm, err := url.QueryUnescape(permEnc)
 	if err != nil {
-		return "", "", "", err
+		return "", "", "", "", err
 	}
 
-	return db, principal, perm, nil
+	return serverID, db, principal, perm, nil
 }
 
 func (r *MssqlGrantResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -85,7 +103,7 @@ func (r *MssqlGrantResource) Schema(ctx context.Context, req resource.SchemaRequ
 
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
-				MarkdownDescription: "`<database>/<principal>/<permission>`.",
+				MarkdownDescription: "`<server_id>/<database>/<principal>/<permission>` where server_id is `host:port`.",
 				Computed:            true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
@@ -155,7 +173,7 @@ func (r *MssqlGrantResource) Read(ctx context.Context, req resource.ReadRequest,
 	database := data.Database.ValueString()
 	if data.Database.IsUnknown() || data.Database.IsNull() || database == "" {
 		// Try decoding from ID first (for imports), otherwise fall back to provider default.
-		if db, principal, perm, err := decodeGrantId(data.Id.ValueString()); err == nil {
+		if _, db, principal, perm, err := decodeGrantId(data.Id.ValueString()); err == nil {
 			database = db
 			data.Database = types.StringValue(database)
 			data.Principal = types.StringValue(principal)
@@ -177,7 +195,7 @@ func (r *MssqlGrantResource) Read(ctx context.Context, req resource.ReadRequest,
 		return
 	}
 
-	data.Id = types.StringValue(encodeGrantId(database, perm.Principal, perm.Permission))
+	data.Id = types.StringValue(encodeGrantId(r.ctx.ServerID, database, perm.Principal, perm.Permission))
 	data.Database = types.StringValue(database)
 	data.Principal = types.StringValue(perm.Principal)
 	data.Permission = types.StringValue(perm.Permission)
@@ -206,7 +224,7 @@ func (r *MssqlGrantResource) Create(ctx context.Context, req resource.CreateRequ
 		return
 	}
 
-	data.Id = types.StringValue(encodeGrantId(database, perm.Principal, perm.Permission))
+	data.Id = types.StringValue(encodeGrantId(r.ctx.ServerID, database, perm.Principal, perm.Permission))
 	tflog.Debug(ctx, fmt.Sprintf("Granted permssion %s to principal %s", data.Permission, data.Principal))
 
 	// Save data into Terraform state
@@ -255,21 +273,43 @@ func (r *MssqlGrantResource) ImportState(ctx context.Context, req resource.Impor
 	// Import formats:
 	// - <principal>/<permission> (uses provider database)
 	// - <database>/<principal>/<permission>
+	// - <server_id>/<principal>/<permission>
+	// - <server_id>/<database>/<principal>/<permission>
 	parts := strings.Split(req.ID, "/")
-	if len(parts) == 2 && parts[0] != "" && parts[1] != "" {
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("database"), r.ctx.Database)...)
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("principal"), parts[0])...)
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("permission"), strings.ToUpper(parts[1]))...)
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), encodeGrantId(r.ctx.Database, parts[0], parts[1]))...)
-		return
-	}
-	if len(parts) == 3 && parts[0] != "" && parts[1] != "" && parts[2] != "" {
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("database"), parts[0])...)
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("principal"), parts[1])...)
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("permission"), strings.ToUpper(parts[2]))...)
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), encodeGrantId(parts[0], parts[1], parts[2]))...)
+	var database, principal, permission string
+
+	switch len(parts) {
+	case 2:
+		database = r.ctx.Database
+		principal = parts[0]
+		permission = parts[1]
+	case 3:
+		if parts[0] == r.ctx.ServerID {
+			database = r.ctx.Database
+			principal = parts[1]
+			permission = parts[2]
+		} else {
+			database = parts[0]
+			principal = parts[1]
+			permission = parts[2]
+		}
+	case 4:
+		database = parts[1]
+		principal = parts[2]
+		permission = parts[3]
+	default:
+		resp.Diagnostics.AddError("Invalid import ID", "expected <principal>/<permission>, <database>/<principal>/<permission>, <server_id>/<principal>/<permission>, or <server_id>/<database>/<principal>/<permission>")
 		return
 	}
 
-	resp.Diagnostics.AddError("Invalid import ID", "expected <principal>/<permission> or <database>/<principal>/<permission>")
+	if database == "" || principal == "" || permission == "" {
+		resp.Diagnostics.AddError("Invalid import ID", "database, principal, and permission must not be empty")
+		return
+	}
+
+	permission = strings.ToUpper(permission)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("database"), database)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("principal"), principal)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("permission"), permission)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), encodeGrantId(r.ctx.ServerID, database, principal, permission))...)
 }

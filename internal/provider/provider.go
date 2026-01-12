@@ -5,6 +5,7 @@ package provider
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
@@ -156,8 +157,10 @@ func (p *MssqlProvider) Configure(ctx context.Context, req provider.ConfigureReq
 	if data.Port.IsNull() || port <= 0 {
 		port = 1433
 	}
+	serverID := fmt.Sprintf("%s:%d", host, port)
 	client := &core.ProviderData{
 		Client:   mssql.NewClient(host, port, data.Database.ValueString(), data.SqlAuth.Username.ValueString(), data.SqlAuth.Password.ValueString()),
+		ServerID: serverID,
 		Database: data.Database.ValueString(),
 	}
 
