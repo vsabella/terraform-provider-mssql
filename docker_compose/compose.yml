@@ -11,7 +11,7 @@ services:
       ACCEPT_EULA: y
       MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD}
     healthcheck:
-      test: /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P '${MSSQL_SA_PASSWORD}' -Q 'select 1'
+      test: /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P "${MSSQL_SA_PASSWORD}" -Q 'select 1'
       interval: 15s
       start_period: 15s
       timeout: 10s

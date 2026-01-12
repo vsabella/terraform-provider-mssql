@@ -1,0 +1,35 @@
+version: "3"
+
+# Loads local dev environment variables (e.g. MSSQL_SA_PASSWORD) if present.
+# This file is intentionally not required; tests will fail if required env vars are missing.
+dotenv:
+  - docker_compose/.env
+
+tasks:
+  fmt:
+    desc: Format Go code
+    cmds:
+      - gofmt -w $(find . -name '*.go' -not -path './vendor/*')
+
+  db:up:
+    desc: Start local MSSQL docker-compose stack and run setup.sql
+    dir: docker_compose
+    cmds:
+      - ./start.sh
+
+  db:down:
+    desc: Stop local MSSQL docker-compose stack
+    dir: docker_compose
+    cmds:
+      - ./stop.sh
+
+  test:
+    desc: Run all tests (requires MSSQL_SA_PASSWORD for integration/acceptance-style tests)
+    cmds:
+      - go test ./... -count=1
+
+  test:acc:
+    desc: Run acceptance tests (starts/stops local MSSQL docker-compose stack)
+    cmds:
+      - ci/run_acceptance.sh
+
