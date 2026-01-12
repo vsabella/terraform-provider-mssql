@@ -62,8 +62,8 @@ func (p *MssqlProvider) Schema(ctx context.Context, req provider.SchemaRequest, 
 				Optional:            true,
 			},
 			"sql_auth": schema.SingleNestedAttribute{
-				Description: "When provided, SQL authentication will be used when connecting.",
-				Optional:    true,
+				Description: "SQL authentication credentials used when connecting.",
+				Required:    true,
 				Attributes: map[string]schema.Attribute{
 					"username": schema.StringAttribute{
 						Description: "User name for SQL authentication.",
@@ -116,9 +116,41 @@ func (p *MssqlProvider) Configure(ctx context.Context, req provider.ConfigureReq
 		return
 	}
 
+	// Validate sql_auth (required to connect)
+	if data.SqlAuth == nil {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("sql_auth"),
+			"Missing SQL Authentication",
+			"`sql_auth` is required. Provide `sql_auth { username = \"...\" password = \"...\" }`.",
+		)
+		return
+	}
+	if data.SqlAuth.Username.IsUnknown() || data.SqlAuth.Username.IsNull() || data.SqlAuth.Username.ValueString() == "" {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("sql_auth").AtName("username"),
+			"Missing SQL Username",
+			"`sql_auth.username` must be set.",
+		)
+	}
+	if data.SqlAuth.Password.IsUnknown() || data.SqlAuth.Password.IsNull() || data.SqlAuth.Password.ValueString() == "" {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("sql_auth").AtName("password"),
+			"Missing SQL Password",
+			"`sql_auth.password` must be set.",
+		)
+	}
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
 	// Create Client Context
+	host := data.Host.ValueString()
+	port := data.Port.ValueInt64()
+	if data.Port.IsNull() || port <= 0 {
+		port = 1433
+	}
 	client := &core.ProviderData{
-		Client: mssql.NewClient(data.Host.ValueString(), data.Port.ValueInt64(), data.Database.ValueString(), data.SqlAuth.Username.ValueString(), data.SqlAuth.Password.ValueString()),
+		Client: mssql.NewClient(host, port, data.Database.ValueString(), data.SqlAuth.Username.ValueString(), data.SqlAuth.Password.ValueString()),
 	}
 
 	resp.DataSourceData = client
