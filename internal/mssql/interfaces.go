@@ -37,6 +37,9 @@ type User struct {
 	Sid           string
 	External      bool
 	DefaultSchema string
+	// LoginName is set for login-mapped users (CREATE USER ... FOR LOGIN ...).
+	// It will be empty for contained database users and external users.
+	LoginName string
 }
 
 type RoleMembership struct {

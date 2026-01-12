@@ -41,6 +41,7 @@ type MssqlUserResourceModel struct {
 	External      types.Bool   `tfsdk:"external"`
 	Sid           types.String `tfsdk:"sid"`
 	DefaultSchema types.String `tfsdk:"default_schema"`
+	LoginName     types.String `tfsdk:"login_name"`
 }
 
 func (r *MssqlUserResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -108,6 +109,13 @@ func (r *MssqlUserResource) Schema(ctx context.Context, req resource.SchemaReque
 				Computed: true,
 				Default:  stringdefault.StaticString("dbo"),
 			},
+			"login_name": schema.StringAttribute{
+				MarkdownDescription: "For login-mapped users, the server login name. Null for contained users and external users.",
+				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
 		},
 	}
 }
@@ -172,6 +180,12 @@ func userToResource(data *MssqlUserResourceModel, database string, user mssql.Us
 	data.Id = types.StringValue(fmt.Sprintf("%s/%s", database, user.Username))
 	data.Database = types.StringValue(database)
 	data.Username = types.StringValue(user.Username)
+
+	if user.LoginName != "" {
+		data.LoginName = types.StringValue(user.LoginName)
+	} else {
+		data.LoginName = types.StringNull()
+	}
 
 	if user.Sid != "" {
 		data.Sid = types.StringValue(user.Sid)
