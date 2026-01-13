@@ -781,3 +781,317 @@ EXEC (@sql);`
 	_, err := m.conn.ExecContext(ctx, cmd, sql.Named("name", name))
 	return err
 }
+// Database options operations
+
+func (m *client) GetDatabaseOptions(ctx context.Context, name string) (DatabaseOptions, error) {
+	var opts DatabaseOptions
+
+	cmd := `SELECT
+		COALESCE(d.[collation_name], '') AS collation_name,
+		d.[compatibility_level],
+		d.[recovery_model_desc] AS recovery_model,
+		d.[is_read_committed_snapshot_on],
+		d.[snapshot_isolation_state] AS allow_snapshot_isolation,
+		COALESCE(d.[is_accelerated_database_recovery_on], 0) AS accelerated_database_recovery,
+		d.[is_auto_close_on],
+		d.[is_auto_shrink_on],
+		d.[is_auto_create_stats_on],
+		d.[is_auto_update_stats_on],
+		d.[is_auto_update_stats_async_on]
+	FROM sys.databases d
+	WHERE d.[name] = @name`
+
+	tflog.Debug(ctx, fmt.Sprintf("Getting database options for %s", name))
+	result := m.conn.QueryRowContext(ctx, cmd, sql.Named("name", name))
+
+	var (
+		compLevel            int
+		recModel             string
+		rcsi                 bool
+		snapshotIsolation    int
+		adr                  bool
+		autoClose            bool
+		autoShrink           bool
+		autoCreateStats      bool
+		autoUpdateStats      bool
+		autoUpdateStatsAsync bool
+	)
+
+	err := result.Scan(
+		&opts.Collation,
+		&compLevel,
+		&recModel,
+		&rcsi,
+		&snapshotIsolation,
+		&adr,
+		&autoClose,
+		&autoShrink,
+		&autoCreateStats,
+		&autoUpdateStats,
+		&autoUpdateStatsAsync,
+	)
+	if err != nil {
+		return opts, err
+	}
+
+	opts.CompatibilityLevel = &compLevel
+	opts.RecoveryModel = &recModel
+	opts.ReadCommittedSnapshot = &rcsi
+	// snapshot_isolation_state: 0=OFF, 1=ON, 2=IN_TRANSITION_TO_ON, 3=IN_TRANSITION_TO_OFF
+	snapshotBool := snapshotIsolation != 0 && snapshotIsolation != 3
+	opts.AllowSnapshotIsolation = &snapshotBool
+	opts.AcceleratedDatabaseRecovery = &adr
+	opts.AutoClose = &autoClose
+	opts.AutoShrink = &autoShrink
+	opts.AutoCreateStats = &autoCreateStats
+	opts.AutoUpdateStats = &autoUpdateStats
+	opts.AutoUpdateStatsAsync = &autoUpdateStatsAsync
+
+	return opts, nil
+}
+
+func boolToOnOff(b bool) string {
+	if b {
+		return "ON"
+	}
+	return "OFF"
+}
+
+func validateToken(field, value string) error {
+	v := strings.TrimSpace(value)
+	if v == "" {
+		return fmt.Errorf("%s must not be empty", field)
+	}
+	if len(v) > 128 {
+		return fmt.Errorf("%s must be <= 128 characters", field)
+	}
+	for _, r := range v {
+		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' {
+			continue
+		}
+		return fmt.Errorf("%s contains invalid characters", field)
+	}
+	return nil
+}
+
+func (m *client) execAlterDatabase(ctx context.Context, database string, clause string) error {
+	// Use QUOTENAME(@db) to safely inject the database identifier.
+	cmd := `DECLARE @sql NVARCHAR(max);
+SET @sql = N'ALTER DATABASE ' + QUOTENAME(@db) + N' ` + clause + `';
+EXEC (@sql);`
+
+	_, err := m.conn.ExecContext(ctx, cmd, sql.Named("db", database))
+	return err
+}
+
+func (m *client) SetDatabaseOptions(ctx context.Context, name string, opts DatabaseOptions) error {
+	if err := validateIdentifier("database name", name); err != nil {
+		return err
+	}
+
+	var errs []string
+
+	if opts.Collation != "" {
+		// Collation is an identifier-like token.
+		if err := validateToken("collation", opts.Collation); err != nil {
+			return err
+		}
+		stmt := "COLLATE " + opts.Collation
+		tflog.Debug(ctx, fmt.Sprintf("Setting database option: ALTER DATABASE %s %s", name, stmt))
+		if err := m.execAlterDatabase(ctx, name, stmt); err != nil {
+			errs = append(errs, fmt.Sprintf("COLLATE: %v", err))
+		}
+	}
+
+	if opts.CompatibilityLevel != nil {
+		stmt := fmt.Sprintf("SET COMPATIBILITY_LEVEL = %d", *opts.CompatibilityLevel)
+		tflog.Debug(ctx, fmt.Sprintf("Setting database option: ALTER DATABASE %s %s", name, stmt))
+		if err := m.execAlterDatabase(ctx, name, stmt); err != nil {
+			errs = append(errs, fmt.Sprintf("COMPATIBILITY_LEVEL: %v", err))
+		}
+	}
+
+	if opts.RecoveryModel != nil && *opts.RecoveryModel != "" {
+		model := strings.ToUpper(strings.TrimSpace(*opts.RecoveryModel))
+		switch model {
+		case "FULL", "BULK_LOGGED", "SIMPLE":
+			// ok
+		default:
+			return fmt.Errorf("invalid recovery_model %q", *opts.RecoveryModel)
+		}
+		stmt := "SET RECOVERY " + model
+		tflog.Debug(ctx, fmt.Sprintf("Setting database option: ALTER DATABASE %s %s", name, stmt))
+		if err := m.execAlterDatabase(ctx, name, stmt); err != nil {
+			errs = append(errs, fmt.Sprintf("RECOVERY: %v", err))
+		}
+	}
+
+	if opts.AllowSnapshotIsolation != nil {
+		stmt := "SET ALLOW_SNAPSHOT_ISOLATION " + boolToOnOff(*opts.AllowSnapshotIsolation)
+		tflog.Debug(ctx, fmt.Sprintf("Setting database option: ALTER DATABASE %s %s", name, stmt))
+		if err := m.execAlterDatabase(ctx, name, stmt); err != nil {
+			errs = append(errs, fmt.Sprintf("ALLOW_SNAPSHOT_ISOLATION: %v", err))
+		}
+	}
+
+	if opts.ReadCommittedSnapshot != nil {
+		stmt := "SET READ_COMMITTED_SNAPSHOT " + boolToOnOff(*opts.ReadCommittedSnapshot) + " WITH ROLLBACK IMMEDIATE"
+		tflog.Debug(ctx, fmt.Sprintf("Setting database option: ALTER DATABASE %s %s", name, stmt))
+		if err := m.execAlterDatabase(ctx, name, stmt); err != nil {
+			errs = append(errs, fmt.Sprintf("READ_COMMITTED_SNAPSHOT: %v", err))
+		}
+	}
+
+	if opts.AutoClose != nil {
+		stmt := "SET AUTO_CLOSE " + boolToOnOff(*opts.AutoClose)
+		tflog.Debug(ctx, fmt.Sprintf("Setting database option: ALTER DATABASE %s %s", name, stmt))
+		if err := m.execAlterDatabase(ctx, name, stmt); err != nil {
+			errs = append(errs, fmt.Sprintf("AUTO_CLOSE: %v", err))
+		}
+	}
+
+	if opts.AutoShrink != nil {
+		stmt := "SET AUTO_SHRINK " + boolToOnOff(*opts.AutoShrink)
+		tflog.Debug(ctx, fmt.Sprintf("Setting database option: ALTER DATABASE %s %s", name, stmt))
+		if err := m.execAlterDatabase(ctx, name, stmt); err != nil {
+			errs = append(errs, fmt.Sprintf("AUTO_SHRINK: %v", err))
+		}
+	}
+
+	if opts.AutoCreateStats != nil {
+		stmt := "SET AUTO_CREATE_STATISTICS " + boolToOnOff(*opts.AutoCreateStats)
+		tflog.Debug(ctx, fmt.Sprintf("Setting database option: ALTER DATABASE %s %s", name, stmt))
+		if err := m.execAlterDatabase(ctx, name, stmt); err != nil {
+			errs = append(errs, fmt.Sprintf("AUTO_CREATE_STATISTICS: %v", err))
+		}
+	}
+
+	if opts.AutoUpdateStats != nil {
+		stmt := "SET AUTO_UPDATE_STATISTICS " + boolToOnOff(*opts.AutoUpdateStats)
+		tflog.Debug(ctx, fmt.Sprintf("Setting database option: ALTER DATABASE %s %s", name, stmt))
+		if err := m.execAlterDatabase(ctx, name, stmt); err != nil {
+			errs = append(errs, fmt.Sprintf("AUTO_UPDATE_STATISTICS: %v", err))
+		}
+	}
+
+	if opts.AutoUpdateStatsAsync != nil {
+		stmt := "SET AUTO_UPDATE_STATISTICS_ASYNC " + boolToOnOff(*opts.AutoUpdateStatsAsync)
+		tflog.Debug(ctx, fmt.Sprintf("Setting database option: ALTER DATABASE %s %s", name, stmt))
+		if err := m.execAlterDatabase(ctx, name, stmt); err != nil {
+			errs = append(errs, fmt.Sprintf("AUTO_UPDATE_STATISTICS_ASYNC: %v", err))
+		}
+	}
+
+	if opts.AcceleratedDatabaseRecovery != nil {
+		stmt := "SET ACCELERATED_DATABASE_RECOVERY = " + boolToOnOff(*opts.AcceleratedDatabaseRecovery) + " WITH ROLLBACK IMMEDIATE"
+		tflog.Debug(ctx, fmt.Sprintf("Setting database option: ALTER DATABASE %s %s", name, stmt))
+		if err := m.execAlterDatabase(ctx, name, stmt); err != nil {
+			errs = append(errs, fmt.Sprintf("ACCELERATED_DATABASE_RECOVERY: %v", err))
+		}
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("failed to set database options: %s", strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+func (m *client) GetDatabaseScopedConfigurations(ctx context.Context, name string) ([]DatabaseScopedConfiguration, error) {
+	var configs []DatabaseScopedConfiguration
+
+	conn, err := m.getConnForDatabase(name)
+	if err != nil {
+		return configs, err
+	}
+
+	cmd := `SELECT
+		[name],
+		CASE SQL_VARIANT_PROPERTY([value], 'BaseType')
+			WHEN 'binary' THEN CONVERT(NVARCHAR(MAX), CONVERT(VARBINARY(MAX), [value]), 1)
+			ELSE CONVERT(NVARCHAR(MAX), [value])
+		END AS value,
+		CASE SQL_VARIANT_PROPERTY([value_for_secondary], 'BaseType')
+			WHEN 'binary' THEN CONVERT(NVARCHAR(MAX), CONVERT(VARBINARY(MAX), [value_for_secondary]), 1)
+			ELSE CONVERT(NVARCHAR(MAX), [value_for_secondary])
+		END AS value_for_secondary
+	FROM sys.database_scoped_configurations
+	WHERE [value] IS NOT NULL`
+
+	tflog.Debug(ctx, fmt.Sprintf("Getting database scoped configurations for %s", name))
+	rows, err := conn.QueryContext(ctx, cmd)
+	if err != nil {
+		return configs, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cfg DatabaseScopedConfiguration
+		var valueForSecondary sql.NullString
+		if err := rows.Scan(&cfg.Name, &cfg.Value, &valueForSecondary); err != nil {
+			return configs, err
+		}
+		if valueForSecondary.Valid {
+			cfg.ValueForSecondary = valueForSecondary.String
+		}
+		configs = append(configs, cfg)
+	}
+
+	return configs, rows.Err()
+}
+
+func (m *client) SetDatabaseScopedConfiguration(ctx context.Context, name string, cfg DatabaseScopedConfiguration) error {
+	if err := validateIdentifier("database name", name); err != nil {
+		return err
+	}
+	if err := validateToken("scoped configuration name", cfg.Name); err != nil {
+		return err
+	}
+	if err := validateToken("scoped configuration value", cfg.Value); err != nil {
+		return err
+	}
+	if cfg.ValueForSecondary != "" {
+		if err := validateToken("scoped configuration value_for_secondary", cfg.ValueForSecondary); err != nil {
+			return err
+		}
+	}
+
+	conn, err := m.getConnForDatabase(name)
+	if err != nil {
+		return err
+	}
+
+	cmd := fmt.Sprintf("ALTER DATABASE SCOPED CONFIGURATION SET %s = %s", cfg.Name, cfg.Value)
+	tflog.Debug(ctx, fmt.Sprintf("Setting database scoped configuration: %s", cmd))
+	if _, err = conn.ExecContext(ctx, cmd); err != nil {
+		return err
+	}
+
+	if cfg.ValueForSecondary != "" {
+		cmd = fmt.Sprintf("ALTER DATABASE SCOPED CONFIGURATION FOR SECONDARY SET %s = %s", cfg.Name, cfg.ValueForSecondary)
+		tflog.Debug(ctx, fmt.Sprintf("Setting database scoped configuration for secondary: %s", cmd))
+		if _, err = conn.ExecContext(ctx, cmd); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (m *client) ClearDatabaseScopedConfiguration(ctx context.Context, name string, configName string) error {
+	if err := validateIdentifier("database name", name); err != nil {
+		return err
+	}
+	if err := validateToken("scoped configuration name", configName); err != nil {
+		return err
+	}
+
+	conn, err := m.getConnForDatabase(name)
+	if err != nil {
+		return err
+	}
+
+	cmd := fmt.Sprintf("ALTER DATABASE SCOPED CONFIGURATION CLEAR %s", configName)
+	tflog.Debug(ctx, fmt.Sprintf("Clearing database scoped configuration: %s", cmd))
+	_, err = conn.ExecContext(ctx, cmd)
+	return err
+}
