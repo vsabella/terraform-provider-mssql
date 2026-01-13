@@ -5,6 +5,7 @@ package provider
 
 import (
 	"context"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/function"
@@ -93,6 +94,12 @@ func (p *MssqlProvider) Configure(ctx context.Context, req provider.ConfigureReq
 			path.Root("host"),
 			"Unknown Sql Server Host",
 			"The provider needs the hostname or IP address of Microsoft SQL Server.",
+		)
+	} else if data.Host.IsNull() || strings.TrimSpace(data.Host.ValueString()) == "" {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("host"),
+			"Missing Sql Server Host",
+			"`host` must be set to the hostname or IP address of Microsoft SQL Server.",
 		)
 	}
 
