@@ -70,6 +70,10 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      # CI-only password for the ephemeral local SQL Server container used in acceptance tests.
+      # This is not a secret and is only used within the GitHub Actions runner.
+      MSSQL_SA_PASSWORD: "CI_StrongPassword_123!"
     strategy:
       fail-fast: false
       matrix:
@@ -92,6 +96,9 @@ jobs:
           terraform_version: ${{ matrix.terraform }}
           terraform_wrapper: false
       - run: go mod download
+      - name: Write docker_compose/.env for local MSSQL
+        run: |
+          echo "MSSQL_SA_PASSWORD=${MSSQL_SA_PASSWORD}" > docker_compose/.env
       - name: Start MSSQL
         working-directory: ./docker_compose
         run: ./start.sh
@@ -100,5 +107,6 @@ jobs:
         run: go test -v -cover ./internal/provider/
         timeout-minutes: 10
       - name: Stop MSSQL
+        if: always()
         working-directory: ./docker_compose
         run: ./stop.sh
