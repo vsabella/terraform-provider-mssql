@@ -157,7 +157,8 @@ func (p *MssqlProvider) Configure(ctx context.Context, req provider.ConfigureReq
 		port = 1433
 	}
 	client := &core.ProviderData{
-		Client: mssql.NewClient(host, port, data.Database.ValueString(), data.SqlAuth.Username.ValueString(), data.SqlAuth.Password.ValueString()),
+		Client:   mssql.NewClient(host, port, data.Database.ValueString(), data.SqlAuth.Username.ValueString(), data.SqlAuth.Password.ValueString()),
+		Database: data.Database.ValueString(),
 	}
 
 	resp.DataSourceData = client

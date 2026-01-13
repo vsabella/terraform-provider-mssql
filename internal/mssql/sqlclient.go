@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"sync"
 
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	_ "github.com/microsoft/go-mssqldb"
@@ -19,6 +20,9 @@ type client struct {
 	database string
 	username string
 	password string
+
+	connMu         sync.Mutex
+	connByDatabase map[string]*sql.DB
 }
 
 func buildConnString(host string, port int64, database string, username string, password string) string {
@@ -38,20 +42,71 @@ func NewClient(host string, port int64, database string, username string, passwo
 	}
 
 	c := &client{
-		conn:     conn,
-		host:     host,
-		port:     port,
-		database: database,
-		username: username,
-		password: password,
+		conn:           conn,
+		host:           host,
+		port:           port,
+		database:       database,
+		username:       username,
+		password:       password,
+		connByDatabase: map[string]*sql.DB{},
+	}
+
+	// Seed the pool cache with the default database connection.
+	if database != "" {
+		c.connByDatabase[database] = conn
 	}
 
 	return c
 }
 
-func (m *client) GetUser(ctx context.Context, username string) (User, error) {
+// getConnForDatabase returns a pooled connection for a database.
+//
+// This is intentionally implemented as a cache of `*sql.DB` pools per database,
+// so callers don't need to manage close semantics for per-database connections.
+func (m *client) getConnForDatabase(database string) (*sql.DB, error) {
+	if database == "" || database == m.database {
+		return m.conn, nil
+	}
+
+	m.connMu.Lock()
+	existing := m.connByDatabase[database]
+	m.connMu.Unlock()
+	if existing != nil {
+		return existing, nil
+	}
+
+	// Create outside the lock to avoid blocking concurrent callers.
+	newConn, err := sql.Open("sqlserver", buildConnString(m.host, m.port, database, m.username, m.password))
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to database %s: %v", database, err)
+	}
+
+	if err := newConn.Ping(); err != nil {
+		newConn.Close()
+		return nil, fmt.Errorf("failed to ping database %s: %v", database, err)
+	}
+
+	m.connMu.Lock()
+	// Double-check to avoid duplicating pools in races.
+	if existing = m.connByDatabase[database]; existing == nil {
+		m.connByDatabase[database] = newConn
+		m.connMu.Unlock()
+		return newConn, nil
+	}
+	m.connMu.Unlock()
+
+	newConn.Close()
+	return existing, nil
+}
+
+func (m *client) GetUser(ctx context.Context, database string, username string) (User, error) {
 	user := User{
 		Id: username,
+	}
+
+	conn, err := m.getConnForDatabase(database)
+	if err != nil {
+		return user, err
 	}
 
 	cmd := `SELECT
@@ -65,20 +120,25 @@ FROM sys.database_principals P
 WHERE P.[name] = @username`
 
 	tflog.Debug(ctx, fmt.Sprintf("Executing refresh query for username %s: command %s", username, cmd))
-	result := m.conn.QueryRowContext(ctx, cmd, sql.Named("username", username))
+	result := conn.QueryRowContext(ctx, cmd, sql.Named("username", username))
 
-	err := result.Scan(&user.Id, &user.Sid, &user.Username, &user.Type, &user.External, &user.DefaultSchema)
+	err = result.Scan(&user.Id, &user.Sid, &user.Username, &user.Type, &user.External, &user.DefaultSchema)
 	return user, err
 }
 
-func (m *client) CreateUser(ctx context.Context, create CreateUser) (User, error) {
+func (m *client) CreateUser(ctx context.Context, database string, create CreateUser) (User, error) {
 	var user User
 	cmd, args, err := buildCreateUser(create)
 	if err != nil {
 		return user, err
 	}
 
-	_, err = m.conn.ExecContext(ctx,
+	conn, err := m.getConnForDatabase(database)
+	if err != nil {
+		return user, err
+	}
+
+	_, err = conn.ExecContext(ctx,
 		cmd,
 		args...,
 	)
@@ -86,7 +146,7 @@ func (m *client) CreateUser(ctx context.Context, create CreateUser) (User, error
 		return user, err
 	}
 
-	user, err = m.GetUser(ctx, create.Username)
+	user, err = m.GetUser(ctx, database, create.Username)
 	return user, err
 }
 
@@ -146,13 +206,18 @@ func addOption(builder *strings.Builder, args *[]any, name string, value string,
 	}
 }
 
-func (m *client) UpdateUser(ctx context.Context, update UpdateUser) (User, error) {
+func (m *client) UpdateUser(ctx context.Context, database string, update UpdateUser) (User, error) {
 	var cmdBuilder strings.Builder
 	var optionsBuilder strings.Builder
 	var args []any
 
 	addOption(&optionsBuilder, &args, "PASSWORD", update.Password, false)
 	addOption(&optionsBuilder, &args, "DEFAULT_SCHEMA", update.DefaultSchema, true)
+
+	conn, err := m.getConnForDatabase(database)
+	if err != nil {
+		return User{}, err
+	}
 
 	if optionsBuilder.Len() > 0 {
 
@@ -167,7 +232,7 @@ func (m *client) UpdateUser(ctx context.Context, update UpdateUser) (User, error
 		cmd := cmdBuilder.String()
 		tflog.Debug(ctx, fmt.Sprintf("Updating User %s: cmd: %s", update.Id, cmd))
 
-		_, err := m.conn.ExecContext(ctx,
+		_, err := conn.ExecContext(ctx,
 			cmd,
 			args...,
 		)
@@ -177,17 +242,23 @@ func (m *client) UpdateUser(ctx context.Context, update UpdateUser) (User, error
 		}
 	}
 
-	return m.GetUser(ctx, update.Id)
+	return m.GetUser(ctx, database, update.Id)
 
 }
 
-func (m *client) DeleteUser(ctx context.Context, username string) error {
+func (m *client) DeleteUser(ctx context.Context, database string, username string) error {
 	cmd := `DECLARE @sql NVARCHAR(max);
           SET @sql = 'IF EXISTS (SELECT 1 FROM [sys].[database_principals] WHERE [type] IN (''E'',''S'',''X'') AND [name] = ' + QUOTENAME(@p1, '''') + ') DROP USER ' + QUOTENAME(@p2);
           EXEC (@sql);`
 
 	tflog.Debug(ctx, fmt.Sprintf("Deleting User %s: cmd: %s", username, cmd))
-	_, err := m.conn.ExecContext(ctx,
+
+	conn, err := m.getConnForDatabase(database)
+	if err != nil {
+		return err
+	}
+
+	_, err = conn.ExecContext(ctx,
 		cmd,
 		username,
 		username,
@@ -219,10 +290,15 @@ func decodeRoleMembershipId(id string) (string, string, error) {
 	return role, member, err
 }
 
-func (m *client) ReadRoleMembership(ctx context.Context, id string) (RoleMembership, error) {
+func (m *client) ReadRoleMembership(ctx context.Context, database string, id string) (RoleMembership, error) {
 	var roleMembership RoleMembership
 
 	role, member, err := decodeRoleMembershipId(id)
+	if err != nil {
+		return roleMembership, err
+	}
+
+	conn, err := m.getConnForDatabase(database)
 	if err != nil {
 		return roleMembership, err
 	}
@@ -241,7 +317,7 @@ AND M.name = @p2
 
 	tflog.Debug(ctx, fmt.Sprintf("Reading Role Assignment role %s, member %s: cmd: %s", role, member, cmd))
 
-	result := m.conn.QueryRowContext(ctx,
+	result := conn.QueryRowContext(ctx,
 		cmd,
 		role,
 		member,
@@ -259,15 +335,20 @@ AND M.name = @p2
 	return roleMembership, err
 }
 
-func (m *client) AssignRole(ctx context.Context, role string, member string) (RoleMembership, error) {
+func (m *client) AssignRole(ctx context.Context, database string, role string, member string) (RoleMembership, error) {
 	var roleMembership RoleMembership
+
+	conn, err := m.getConnForDatabase(database)
+	if err != nil {
+		return roleMembership, err
+	}
 
 	cmd := `DECLARE @sql NVARCHAR(max);
           SET @sql = 'ALTER ROLE ' + QUOTENAME(@p1) + ' ADD MEMBER ' + QUOTENAME(@p2);
           EXEC (@sql);`
 
 	tflog.Debug(ctx, fmt.Sprintf("Adding Principal %s to role %s: cmd: %s", member, role, cmd))
-	_, err := m.conn.ExecContext(ctx,
+	_, err = conn.ExecContext(ctx,
 		cmd,
 		role,
 		member,
@@ -276,16 +357,21 @@ func (m *client) AssignRole(ctx context.Context, role string, member string) (Ro
 	if err != nil {
 		return roleMembership, err
 	}
-	return m.ReadRoleMembership(ctx, encodeRoleMembershipId(role, member))
+	return m.ReadRoleMembership(ctx, database, encodeRoleMembershipId(role, member))
 }
 
-func (m *client) UnassignRole(ctx context.Context, role string, principal string) error {
+func (m *client) UnassignRole(ctx context.Context, database string, role string, principal string) error {
+	conn, err := m.getConnForDatabase(database)
+	if err != nil {
+		return err
+	}
+
 	cmd := `DECLARE @sql NVARCHAR(max);
           SET @sql = 'ALTER ROLE ' + QUOTENAME(@p1) + ' DROP MEMBER ' + QUOTENAME(@p2);
           EXEC (@sql);`
 
 	tflog.Debug(ctx, fmt.Sprintf("Removing Principal %s from role %s: cmd: %s", principal, role, cmd))
-	_, err := m.conn.ExecContext(ctx,
+	_, err = conn.ExecContext(ctx,
 		cmd,
 		role,
 		principal,
@@ -294,10 +380,15 @@ func (m *client) UnassignRole(ctx context.Context, role string, principal string
 	return err
 }
 
-func (m *client) ReadDatabasePermission(ctx context.Context, id string) (DatabaseGrantPermission, error) {
+func (m *client) ReadDatabasePermission(ctx context.Context, database string, id string) (DatabaseGrantPermission, error) {
 	var DatabaseGrantPermission DatabaseGrantPermission
 	principal := strings.Split(id, "/")[0]
 	permission := strings.Split(id, "/")[1]
+
+	conn, err := m.getConnForDatabase(database)
+	if err != nil {
+		return DatabaseGrantPermission, err
+	}
 
 	cmd := `
 		SELECT
@@ -315,9 +406,9 @@ func (m *client) ReadDatabasePermission(ctx context.Context, id string) (Databas
 	`
 
 	tflog.Debug(ctx, fmt.Sprintf("Reading DB permission [principal: %s, permission: %s]", principal, permission))
-	result := m.conn.QueryRowContext(ctx, cmd, principal, permission)
+	result := conn.QueryRowContext(ctx, cmd, principal, permission)
 
-	err := result.Scan(&DatabaseGrantPermission.Principal, &DatabaseGrantPermission.Permission)
+	err = result.Scan(&DatabaseGrantPermission.Principal, &DatabaseGrantPermission.Permission)
 	if err != nil {
 		tflog.Warn(ctx, fmt.Sprintf("failed to scan result: %v", err))
 		return DatabaseGrantPermission, err
@@ -329,7 +420,7 @@ func (m *client) ReadDatabasePermission(ctx context.Context, id string) (Databas
 	return DatabaseGrantPermission, nil
 }
 
-func (m *client) GrantDatabasePermission(ctx context.Context, principal string, permission string) (DatabaseGrantPermission, error) {
+func (m *client) GrantDatabasePermission(ctx context.Context, database string, principal string, permission string) (DatabaseGrantPermission, error) {
 	var DatabaseGrantPermission DatabaseGrantPermission
 
 	perm, err := normalizeDatabasePermission(permission)
@@ -341,26 +432,36 @@ func (m *client) GrantDatabasePermission(ctx context.Context, principal string, 
 		return DatabaseGrantPermission, err
 	}
 
+	conn, err := m.getConnForDatabase(database)
+	if err != nil {
+		return DatabaseGrantPermission, err
+	}
+
 	cmd := `DECLARE @sql NVARCHAR(max);
 SET @sql = N'GRANT ' + @p1 + N' TO ' + QUOTENAME(@p2) + N';';
 EXEC (@sql);`
 
 	tflog.Debug(ctx, fmt.Sprintf("Granting permission %s to %s", perm, principal))
 
-	_, err = m.conn.ExecContext(ctx, cmd, perm, principal)
+	_, err = conn.ExecContext(ctx, cmd, perm, principal)
 	if err != nil {
 		return DatabaseGrantPermission, fmt.Errorf("failed to execute grant query: %v", err)
 	}
 
-	return m.ReadDatabasePermission(ctx, fmt.Sprintf("%s/%s", principal, perm))
+	return m.ReadDatabasePermission(ctx, database, fmt.Sprintf("%s/%s", principal, perm))
 }
 
-func (m *client) RevokeDatabasePermission(ctx context.Context, principal string, permission string) error {
+func (m *client) RevokeDatabasePermission(ctx context.Context, database string, principal string, permission string) error {
 	perm, err := normalizeDatabasePermission(permission)
 	if err != nil {
 		return err
 	}
 	principal, err = normalizePrincipalName(principal)
+	if err != nil {
+		return err
+	}
+
+	conn, err := m.getConnForDatabase(database)
 	if err != nil {
 		return err
 	}
@@ -371,7 +472,7 @@ EXEC (@sql);`
 
 	tflog.Debug(ctx, fmt.Sprintf("Revoking permission %s from user %s", perm, principal))
 
-	_, err = m.conn.ExecContext(ctx, cmd, perm, principal)
+	_, err = conn.ExecContext(ctx, cmd, perm, principal)
 	if err != nil {
 		return fmt.Errorf("failed to execute revoke query: %v", err)
 	}
@@ -406,39 +507,54 @@ func normalizeDatabasePermission(permission string) (string, error) {
 	return p, nil
 }
 
-func (m *client) GetRole(ctx context.Context, name string) (Role, error) {
+func (m *client) GetRole(ctx context.Context, database string, name string) (Role, error) {
 	role := Role{
 		Id:   name,
 		Name: name,
 	}
 
+	conn, err := m.getConnForDatabase(database)
+	if err != nil {
+		return role, err
+	}
+
 	cmd := `SELECT [name] FROM sys.database_principals WHERE [type] = 'R' AND [name] = @name`
 	tflog.Debug(ctx, fmt.Sprintf("Executing refresh query for role %s: command %s", name, cmd))
-	result := m.conn.QueryRowContext(ctx, cmd, sql.Named("name", name))
-	err := result.Scan(&role.Id)
+	result := conn.QueryRowContext(ctx, cmd, sql.Named("name", name))
+	err = result.Scan(&role.Id)
 	return role, err
 }
 
-func (m *client) CreateRole(ctx context.Context, name string) (Role, error) {
+func (m *client) CreateRole(ctx context.Context, database string, name string) (Role, error) {
 	var role Role
-	query := fmt.Sprintf("CREATE ROLE [%s]", name)
-	_, _ = m.conn.ExecContext(ctx, query)
+	conn, err := m.getConnForDatabase(database)
+	if err != nil {
+		return role, err
+	}
 
-	role, err := m.GetRole(ctx, name)
+	query := fmt.Sprintf("CREATE ROLE [%s]", name)
+	_, _ = conn.ExecContext(ctx, query)
+
+	role, err = m.GetRole(ctx, database, name)
 	return role, err
 }
 
-func (m *client) UpdateRole(ctx context.Context, role Role) (Role, error) {
+func (m *client) UpdateRole(ctx context.Context, database string, role Role) (Role, error) {
 	var update Role
 	// TODO update role.name to update
 	update.Id = role.Id
-	return m.GetRole(ctx, update.Id)
+	return m.GetRole(ctx, database, update.Id)
 }
 
-func (m *client) DeleteRole(ctx context.Context, name string) error {
+func (m *client) DeleteRole(ctx context.Context, database string, name string) error {
+	conn, err := m.getConnForDatabase(database)
+	if err != nil {
+		return err
+	}
+
 	query := fmt.Sprintf("DROP ROLE %s", name)
 	tflog.Debug(ctx, fmt.Sprintf("Deleting Role %s: cmd: %s", name, query))
-	_, err := m.conn.ExecContext(ctx, query)
+	_, err = conn.ExecContext(ctx, query)
 
 	return err
 }
