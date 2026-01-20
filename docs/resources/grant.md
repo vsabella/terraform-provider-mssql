@@ -20,6 +20,10 @@ DB grant resource
 - `permission` (String) Name of database-level SQL permission. For full list of supported permissions, see [docs](https://learn.microsoft.com/en-us/sql/t-sql/statements/grant-database-permissions-transact-sql?view=azuresqldb-current#remarks)
 - `principal` (String) Database principal to grant permission to.
 
+### Optional
+
+- `database` (String) Target database. If not specified, uses the provider's configured database.
+
 ### Read-Only
 
-- `id` (String) `<principal>/<permission>`.
+- `id` (String) `<database>/<principal>/<permission>`.
