@@ -55,6 +55,11 @@ To compile the provider, run `go install`. This will build the provider and put 
 
 To generate or update documentation, run `go generate`.
 
-In order to run the full suite of Acceptance tests, run `make testacc`.
+This repo uses [Task](https://taskfile.dev/) for common dev workflows.
+
+- Run all tests:
+  - `task test`
+- Run acceptance tests (starts/stops a local MSSQL container):
+  - `task test:acc`
 
 *Note:* Acceptance tests require modern docker/docker-compose. They creates an empty local SQL DB container to run the tests.  See [ci/run_acceptance.sh](ci/run_acceptance.sh)
