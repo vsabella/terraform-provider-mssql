@@ -32,7 +32,6 @@ type SqlClient interface {
 	// ExecScript executes an arbitrary SQL script in the specified database.
 	// If database is empty, the provider's configured database is used.
 	ExecScript(ctx context.Context, database string, script string) error
-
 	// Login operations (server-level principals).
 	GetLogin(ctx context.Context, name string) (Login, error)
 	CreateLogin(ctx context.Context, create CreateLogin) (Login, error)
@@ -88,7 +87,7 @@ type Database struct {
 	Name string
 }
 
-// Login represents a SQL Server login (server-level principal)
+// Login represents a SQL Server login (server-level principal).
 type Login struct {
 	Name            string
 	DefaultDatabase string
@@ -96,7 +95,7 @@ type Login struct {
 	IsDisabled      bool
 }
 
-// CreateLogin contains parameters for creating a new login
+// CreateLogin contains parameters for creating a new login.
 type CreateLogin struct {
 	Name            string
 	Password        string
@@ -104,7 +103,7 @@ type CreateLogin struct {
 	DefaultLanguage string
 }
 
-// UpdateLogin contains parameters for updating an existing login
+// UpdateLogin contains parameters for updating an existing login.
 type UpdateLogin struct {
 	Name            string
 	Password        string

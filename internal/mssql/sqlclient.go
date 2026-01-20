@@ -671,7 +671,7 @@ func (m *client) CreateLogin(ctx context.Context, create CreateLogin) (Login, er
 		}
 	}
 
-	// Build the CREATE LOGIN command using dynamic SQL for safety
+	// Build the CREATE LOGIN command using dynamic SQL for safety.
 	var cmdBuilder strings.Builder
 	var args []any
 
