@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
-	"sync"
 
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	_ "github.com/microsoft/go-mssqldb"
@@ -20,9 +19,6 @@ type client struct {
 	database string
 	username string
 	password string
-
-	connMu         sync.Mutex
-	connByDatabase map[string]*sql.DB
 }
 
 func buildConnString(host string, port int64, database string, username string, password string) string {
@@ -42,61 +38,15 @@ func NewClient(host string, port int64, database string, username string, passwo
 	}
 
 	c := &client{
-		conn:           conn,
-		host:           host,
-		port:           port,
-		database:       database,
-		username:       username,
-		password:       password,
-		connByDatabase: map[string]*sql.DB{},
-	}
-
-	// Seed the pool cache with the default database connection.
-	if database != "" {
-		c.connByDatabase[database] = conn
+		conn:     conn,
+		host:     host,
+		port:     port,
+		database: database,
+		username: username,
+		password: password,
 	}
 
 	return c
-}
-
-// getConnForDatabase returns a pooled connection for a database.
-//
-// This is intentionally implemented as a cache of `*sql.DB` pools per database,
-// so callers don't need to manage close semantics for per-database connections.
-func (m *client) getConnForDatabase(database string) (*sql.DB, error) {
-	if database == "" || database == m.database {
-		return m.conn, nil
-	}
-
-	m.connMu.Lock()
-	existing := m.connByDatabase[database]
-	m.connMu.Unlock()
-	if existing != nil {
-		return existing, nil
-	}
-
-	// Create outside the lock to avoid blocking concurrent callers.
-	newConn, err := sql.Open("sqlserver", buildConnString(m.host, m.port, database, m.username, m.password))
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to database %s: %v", database, err)
-	}
-
-	if err := newConn.Ping(); err != nil {
-		newConn.Close()
-		return nil, fmt.Errorf("failed to ping database %s: %v", database, err)
-	}
-
-	m.connMu.Lock()
-	// Double-check to avoid duplicating pools in races.
-	if existing = m.connByDatabase[database]; existing == nil {
-		m.connByDatabase[database] = newConn
-		m.connMu.Unlock()
-		return newConn, nil
-	}
-	m.connMu.Unlock()
-
-	newConn.Close()
-	return existing, nil
 }
 
 func (m *client) GetUser(ctx context.Context, username string) (User, error) {
