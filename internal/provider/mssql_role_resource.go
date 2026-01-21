@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"database/sql"
 	"errors"
@@ -31,8 +32,10 @@ type MssqlRoleResource struct {
 }
 
 type MssqlRoleResourceModel struct {
-	Id   types.String `tfsdk:"id"`
-	Name types.String `tfsdk:"name"`
+	Id types.String `tfsdk:"id"`
+	// Database is the target database. If omitted, uses provider database.
+	Database types.String `tfsdk:"database"`
+	Name     types.String `tfsdk:"name"`
 }
 
 func (r *MssqlRoleResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -48,6 +51,15 @@ func (r *MssqlRoleResource) Schema(ctx context.Context, req resource.SchemaReque
 			"id": schema.StringAttribute{
 				Computed: true,
 				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"database": schema.StringAttribute{
+				MarkdownDescription: "Target database. If not specified, uses the provider's configured database.",
+				Optional:            true,
+				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
 					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
@@ -90,13 +102,20 @@ func (r *MssqlRoleResource) Create(ctx context.Context, req resource.CreateReque
 		return
 	}
 
-	role, err := r.ctx.Client.CreateRole(ctx, data.Name.ValueString())
+	database := data.Database.ValueString()
+	if data.Database.IsUnknown() || data.Database.IsNull() || database == "" {
+		database = r.ctx.Database
+		data.Database = types.StringValue(database)
+	}
+
+	role, err := r.ctx.Client.CreateRole(ctx, database, data.Name.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError(fmt.Sprintf("Error creating role %s", data.Id.ValueString()), err.Error())
 		return
 	}
 
-	data.Id = types.StringValue(role.Id)
+	data.Id = types.StringValue(fmt.Sprintf("%s/%s", database, role.Name))
+	data.Name = types.StringValue(role.Name)
 	tflog.Debug(ctx, fmt.Sprintf("Created role %s", data.Id))
 
 	// Save data into Terraform state
@@ -104,7 +123,7 @@ func (r *MssqlRoleResource) Create(ctx context.Context, req resource.CreateReque
 }
 
 func (r *MssqlRoleResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var data MssqlGrantResource
+	var data MssqlRoleResourceModel
 
 	// Read Terraform plan data into the model
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
@@ -123,7 +142,12 @@ func (r *MssqlRoleResource) Read(ctx context.Context, req resource.ReadRequest, 
 		return
 	}
 
-	role, err := r.ctx.Client.GetRole(ctx, data.Id.ValueString())
+	database := data.Database.ValueString()
+	if data.Database.IsUnknown() || data.Database.IsNull() || database == "" {
+		database = r.ctx.Database
+	}
+
+	role, err := r.ctx.Client.GetRole(ctx, database, data.Name.ValueString())
 
 	// If resource is not found, remove it from the state
 	if errors.Is(err, sql.ErrNoRows) {
@@ -134,7 +158,9 @@ func (r *MssqlRoleResource) Read(ctx context.Context, req resource.ReadRequest, 
 		return
 	}
 
-	data.Id = types.StringValue(role.Id)
+	data.Id = types.StringValue(fmt.Sprintf("%s/%s", database, role.Name))
+	data.Database = types.StringValue(database)
+	data.Name = types.StringValue(role.Name)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
@@ -147,7 +173,12 @@ func (r *MssqlRoleResource) Delete(ctx context.Context, req resource.DeleteReque
 		return
 	}
 
-	err := r.ctx.Client.DeleteRole(ctx, data.Id.ValueString())
+	database := data.Database.ValueString()
+	if data.Database.IsUnknown() || data.Database.IsNull() || database == "" {
+		database = r.ctx.Database
+	}
+
+	err := r.ctx.Client.DeleteRole(ctx, database, data.Name.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError("unable to delete role", fmt.Sprintf("unable to delete role %s, got error: %s", data.Id.ValueString(), err))
 		return
@@ -155,5 +186,22 @@ func (r *MssqlRoleResource) Delete(ctx context.Context, req resource.DeleteReque
 }
 
 func (r *MssqlRoleResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+	// Import formats:
+	// - <role> (uses provider database)
+	// - <database>/<role>
+	parts := strings.Split(req.ID, "/")
+	if len(parts) == 1 {
+		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("database"), r.ctx.Database)...)
+		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("name"), parts[0])...)
+		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), fmt.Sprintf("%s/%s", r.ctx.Database, parts[0]))...)
+		return
+	}
+	if len(parts) == 2 && parts[0] != "" && parts[1] != "" {
+		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("database"), parts[0])...)
+		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("name"), parts[1])...)
+		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
+		return
+	}
+
+	resp.Diagnostics.AddError("Invalid import ID", "expected <role> or <database>/<role>")
 }

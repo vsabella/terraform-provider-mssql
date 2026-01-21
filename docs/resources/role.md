@@ -19,6 +19,10 @@ MssqlRole resource
 
 - `name` (String)
 
+### Optional
+
+- `database` (String) Target database. If not specified, uses the provider's configured database.
+
 ### Read-Only
 
 - `id` (String) The ID of this resource.

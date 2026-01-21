@@ -20,6 +20,10 @@ MssqlUser resource
 - `principal` (String) Database principal (e.g. username) to assign the role to
 - `role` (String) Role to to assign
 
+### Optional
+
+- `database` (String) Target database. If not specified, uses the provider's configured database.
+
 ### Read-Only
 
 - `id` (String) The ID of this resource.

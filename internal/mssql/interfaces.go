@@ -5,20 +5,26 @@ import (
 )
 
 type SqlClient interface {
-	GetUser(ctx context.Context, username string) (User, error)
-	CreateUser(ctx context.Context, create CreateUser) (User, error)
-	UpdateUser(ctx context.Context, update UpdateUser) (User, error)
-	DeleteUser(ctx context.Context, username string) error
-	ReadRoleMembership(ctx context.Context, id string) (RoleMembership, error)
-	AssignRole(ctx context.Context, role string, principal string) (RoleMembership, error)
-	UnassignRole(ctx context.Context, role string, principal string) error
-	ReadDatabasePermission(ctx context.Context, id string) (DatabaseGrantPermission, error)
-	GrantDatabasePermission(ctx context.Context, principal string, permission string) (DatabaseGrantPermission, error)
-	RevokeDatabasePermission(ctx context.Context, principal string, permission string) error
-	GetRole(ctx context.Context, name string) (Role, error)
-	CreateRole(ctx context.Context, name string) (Role, error)
-	UpdateRole(ctx context.Context, role Role) (Role, error)
-	DeleteRole(ctx context.Context, name string) error
+	// Database-scoped operations
+	GetUser(ctx context.Context, database string, username string) (User, error)
+	CreateUser(ctx context.Context, database string, create CreateUser) (User, error)
+	UpdateUser(ctx context.Context, database string, update UpdateUser) (User, error)
+	DeleteUser(ctx context.Context, database string, username string) error
+
+	ReadRoleMembership(ctx context.Context, database string, id string) (RoleMembership, error)
+	AssignRole(ctx context.Context, database string, role string, principal string) (RoleMembership, error)
+	UnassignRole(ctx context.Context, database string, role string, principal string) error
+
+	ReadDatabasePermission(ctx context.Context, database string, id string) (DatabaseGrantPermission, error)
+	GrantDatabasePermission(ctx context.Context, database string, principal string, permission string) (DatabaseGrantPermission, error)
+	RevokeDatabasePermission(ctx context.Context, database string, principal string, permission string) error
+
+	GetRole(ctx context.Context, database string, name string) (Role, error)
+	CreateRole(ctx context.Context, database string, name string) (Role, error)
+	UpdateRole(ctx context.Context, database string, role Role) (Role, error)
+	DeleteRole(ctx context.Context, database string, name string) error
+
+	// Server-scoped operations
 	GetDatabase(ctx context.Context, name string) (Database, error)
 	GetDatabaseById(ctx context.Context, id int64) (Database, error)
 	CreateDatabase(ctx context.Context, name string) (Database, error)

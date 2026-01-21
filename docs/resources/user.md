@@ -24,6 +24,7 @@ MssqlUser resource
 
 ### Optional
 
+- `database` (String) Target database. If not specified, uses the provider's configured database.
 - `default_schema` (String)
 - `external` (Boolean) Is this an external user (like Microsoft EntraID)
 - `sid` (String) Set custom SID for the user
