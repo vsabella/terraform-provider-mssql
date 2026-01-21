@@ -781,6 +781,7 @@ EXEC (@sql);`
 	_, err := m.conn.ExecContext(ctx, cmd, sql.Named("name", name))
 	return err
 }
+
 // Database options operations
 
 func (m *client) GetDatabaseOptions(ctx context.Context, name string) (DatabaseOptions, error) {
