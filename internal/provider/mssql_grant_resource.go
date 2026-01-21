@@ -49,10 +49,10 @@ func encodeGrantId(serverID, database, principal, permission string) string {
 	)
 }
 
-func decodeGrantId(id string) (string, string, string, string, error) {
+func decodeGrantId(id string) (string, string, string, error) {
 	parts := strings.Split(id, "/")
 	if len(parts) != 3 && len(parts) != 4 {
-		return "", "", "", "", fmt.Errorf("expected id in format <database>/<principal>/<permission> or <server_id>/<database>/<principal>/<permission>, got %q", id)
+		return "", "", "", fmt.Errorf("expected id in format <database>/<principal>/<permission> or <server_id>/<database>/<principal>/<permission>, got %q", id)
 	}
 
 	offset := 0
@@ -60,36 +60,24 @@ func decodeGrantId(id string) (string, string, string, string, error) {
 		offset = 1
 	}
 
-	serverEnc := ""
-	if len(parts) == 4 {
-		serverEnc = parts[0]
-	}
 	dbEnc := parts[offset]
 	prEnc := parts[offset+1]
 	permEnc := parts[offset+2]
 
-	serverID := ""
-	if serverEnc != "" {
-		var err error
-		serverID, err = url.QueryUnescape(serverEnc)
-		if err != nil {
-			return "", "", "", "", err
-		}
-	}
 	db, err := url.QueryUnescape(dbEnc)
 	if err != nil {
-		return "", "", "", "", err
+		return "", "", "", err
 	}
 	principal, err := url.QueryUnescape(prEnc)
 	if err != nil {
-		return "", "", "", "", err
+		return "", "", "", err
 	}
 	perm, err := url.QueryUnescape(permEnc)
 	if err != nil {
-		return "", "", "", "", err
+		return "", "", "", err
 	}
 
-	return serverID, db, principal, perm, nil
+	return db, principal, perm, nil
 }
 
 func (r *MssqlGrantResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -173,7 +161,7 @@ func (r *MssqlGrantResource) Read(ctx context.Context, req resource.ReadRequest,
 	database := data.Database.ValueString()
 	if data.Database.IsUnknown() || data.Database.IsNull() || database == "" {
 		// Try decoding from ID first (for imports), otherwise fall back to provider default.
-		if _, db, principal, perm, err := decodeGrantId(data.Id.ValueString()); err == nil {
+		if db, principal, perm, err := decodeGrantId(data.Id.ValueString()); err == nil {
 			database = db
 			data.Database = types.StringValue(database)
 			data.Principal = types.StringValue(principal)
@@ -255,7 +243,7 @@ func (r *MssqlGrantResource) Delete(ctx context.Context, req resource.DeleteRequ
 	database := data.Database.ValueString()
 	if data.Database.IsUnknown() || data.Database.IsNull() || database == "" {
 		// Try decode from ID for imports
-		if _, db, _, _, err := decodeGrantId(data.Id.ValueString()); err == nil {
+		if db, _, _, err := decodeGrantId(data.Id.ValueString()); err == nil {
 			database = db
 		} else {
 			database = r.ctx.Database
