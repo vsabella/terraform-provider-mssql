@@ -17,7 +17,7 @@ Manages a SQL Server database including engine options and scoped configurations
 
 ### Required
 
-- `name` (String) Database name.
+- `name` (String) Database name. Changing this forces a new resource to be created.
 
 ### Optional
 
@@ -36,7 +36,7 @@ Manages a SQL Server database including engine options and scoped configurations
 
 ### Read-Only
 
-- `id` (Number) Database ID. Can be retrieved using `SELECT DB_ID('<db_name>')`.
+- `id` (String) Resource identifier in format `<server_id>/<database>` where `server_id` is `host:port`.
 
 <a id="nestedblock--scoped_configuration"></a>
 ### Nested Schema for `scoped_configuration`

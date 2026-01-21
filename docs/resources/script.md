@@ -37,4 +37,4 @@ delete_script is only executed when the resource is destroyed (not when version 
 
 ### Read-Only
 
-- `id` (String) Resource identifier in format `<database_name>/<name>`.
+- `id` (String) Resource identifier in format `<server_id>/<database>/<name>` where `server_id` is `host:port`.

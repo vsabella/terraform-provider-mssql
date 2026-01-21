@@ -17,13 +17,15 @@ DB grant resource
 
 ### Required
 
-- `permission` (String) Name of database-level SQL permission. For full list of supported permissions, see [docs](https://learn.microsoft.com/en-us/sql/t-sql/statements/grant-database-permissions-transact-sql?view=azuresqldb-current#remarks)
-- `principal` (String) Database principal to grant permission to.
+- `permission` (String) Permission to grant (e.g., SELECT, EXECUTE, CONTROL, CREATE PROCEDURE).
+- `principal` (String) Database principal (user or role) to grant permission to.
 
 ### Optional
 
 - `database` (String) Target database. If not specified, uses the provider's configured database.
+- `object_name` (String) Name of the object to grant permission on. Required if `object_type` is specified.
+- `object_type` (String) Type of object to grant permission on (e.g., SCHEMA, TABLE, VIEW, PROCEDURE). If not specified, grants a database-level permission.
 
 ### Read-Only
 
-- `id` (String) `<server_id>/<database>/<principal>/<permission>` where server_id is `host:port`.
+- `id` (String) Resource identifier in format `<server_id>/<database>/<principal>/<permission>[/object_type/object_name]` where `server_id` is `host:port`.

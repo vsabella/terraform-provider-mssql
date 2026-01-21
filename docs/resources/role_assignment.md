@@ -22,7 +22,8 @@ MssqlUser resource
 
 ### Optional
 
-- `database` (String) Target database. If not specified, uses the provider's configured database.
+- `database` (String) Target database for database role assignments. If not specified, uses the provider's configured database. Ignored when `server_role = true`.
+- `server_role` (Boolean) If true, assigns to a server-level role (ALTER SERVER ROLE). If false (default), assigns to a database role (ALTER ROLE). When true, `database` is ignored.
 
 ### Read-Only
 

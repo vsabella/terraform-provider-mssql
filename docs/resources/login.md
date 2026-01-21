@@ -29,4 +29,4 @@ Manages a SQL Server login (server-level principal). Use this resource to create
 
 ### Read-Only
 
-- `id` (String) Resource identifier (login name).
+- `id` (String) Resource identifier in format `<server_id>/<login_name>` where `server_id` is `host:port`.
