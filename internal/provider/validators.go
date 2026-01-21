@@ -57,13 +57,13 @@ func (v databasePermissionValidator) ValidateString(ctx context.Context, req val
 		return
 	}
 	for _, r := range val {
-		if (r >= 'A' && r <= 'Z') || r == '_' || r == ' ' {
+		if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == ' ' {
 			continue
 		}
 		resp.Diagnostics.AddAttributeError(
 			req.Path,
 			"Invalid permission",
-			fmt.Sprintf("permission must contain only letters, spaces, and underscores; got %q", raw),
+			fmt.Sprintf("permission must contain only letters, digits, spaces, and underscores; got %q", raw),
 		)
 		return
 	}

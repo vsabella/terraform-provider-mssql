@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 
@@ -824,14 +825,40 @@ func (m *client) RevokePermission(ctx context.Context, grant GrantPermission) er
 
 func normalizePrincipalName(principal string) (string, error) {
 	p := strings.TrimSpace(principal)
-	if p == "" {
-		return "", fmt.Errorf("principal must not be empty")
-	}
-	// SQL Server principal names are sysname (<= 128 characters).
-	if len(p) > 128 {
-		return "", fmt.Errorf("principal must be <= 128 characters")
+	if err := validateIdentifier("principal", p); err != nil {
+		return "", err
 	}
 	return p, nil
+}
+
+// Allow letters, digits, underscore, dot, at, hash, dash, backslash, and space.
+var identifierRe = regexp.MustCompile(`^[A-Za-z0-9_.@#\\ -]+$`)
+var permissionRe = regexp.MustCompile(`^[A-Za-z0-9_ ]+$`)
+
+func validateIdentifier(field, value string) error {
+	if strings.TrimSpace(value) == "" {
+		return fmt.Errorf("%s cannot be empty", field)
+	}
+	if len(value) > 128 {
+		return fmt.Errorf("%s must be 128 characters or fewer", field)
+	}
+	if !identifierRe.MatchString(value) {
+		return fmt.Errorf("%s contains invalid characters", field)
+	}
+	return nil
+}
+
+func validatePermission(field, value string) error {
+	if strings.TrimSpace(value) == "" {
+		return fmt.Errorf("%s cannot be empty", field)
+	}
+	if len(value) > 128 {
+		return fmt.Errorf("%s must be 128 characters or fewer", field)
+	}
+	if !permissionRe.MatchString(value) {
+		return fmt.Errorf("%s contains invalid characters", field)
+	}
+	return nil
 }
 
 // normalizeObjectType converts user-friendly object types to SQL Server securable class names.
@@ -860,15 +887,8 @@ func splitSchemaObject(name string) (schema string, object string) {
 
 func normalizeDatabasePermission(permission string) (string, error) {
 	p := strings.ToUpper(strings.TrimSpace(permission))
-	if p == "" {
-		return "", fmt.Errorf("permission must not be empty")
-	}
-	// Permission is interpolated as a keyword into dynamic SQL, so restrict it to safe tokens.
-	for _, r := range p {
-		if (r >= 'A' && r <= 'Z') || r == '_' || r == ' ' {
-			continue
-		}
-		return "", fmt.Errorf("invalid permission %q: only letters, spaces, and underscores are allowed", permission)
+	if err := validatePermission("permission", p); err != nil {
+		return "", err
 	}
 	return p, nil
 }
@@ -1003,18 +1023,6 @@ func splitBatches(script string) []string {
 	}
 
 	return batches
-}
-
-func validateIdentifier(kind string, value string) error {
-	v := strings.TrimSpace(value)
-	if v == "" {
-		return fmt.Errorf("invalid %s: must not be empty", kind)
-	}
-	// SQL Server identifiers are sysname (<= 128 characters).
-	if len(v) > 128 {
-		return fmt.Errorf("invalid %s: must be <= 128 characters", kind)
-	}
-	return nil
 }
 
 // Login operations.
