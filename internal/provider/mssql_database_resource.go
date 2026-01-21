@@ -5,14 +5,15 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	"github.com/vsabella/terraform-provider-mssql/internal/core"
@@ -33,7 +34,7 @@ type MssqlDatabaseResource struct {
 }
 
 type MssqlDatabaseResourceModel struct {
-	Id                          types.Int64  `tfsdk:"id"`
+	Id                          types.String `tfsdk:"id"`
 	Name                        types.String `tfsdk:"name"`
 	Collation                   types.String `tfsdk:"collation"`
 	CompatibilityLevel          types.Int64  `tfsdk:"compatibility_level"`
@@ -64,16 +65,19 @@ func (r *MssqlDatabaseResource) Schema(ctx context.Context, req resource.SchemaR
 		MarkdownDescription: "Manages a SQL Server database including engine options and scoped configurations. **Note:** Destroy removes the resource from Terraform state but does not drop the database from the server.",
 
 		Attributes: map[string]schema.Attribute{
-			"id": schema.Int64Attribute{
-				MarkdownDescription: "Database ID. Can be retrieved using `SELECT DB_ID('<db_name>')`.",
+			"id": schema.StringAttribute{
+				MarkdownDescription: "Resource identifier in format `<server_id>/<database>` where `server_id` is `host:port`.",
 				Computed:            true,
-				PlanModifiers: []planmodifier.Int64{
-					int64planmodifier.UseStateForUnknown(),
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
 			"name": schema.StringAttribute{
-				MarkdownDescription: "Database name.",
+				MarkdownDescription: "Database name. Changing this forces a new resource to be created.",
 				Required:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
 			},
 			"collation": schema.StringAttribute{
 				MarkdownDescription: "Database collation. If not specified, uses the server default collation.",
@@ -186,14 +190,14 @@ func (r *MssqlDatabaseResource) Create(ctx context.Context, req resource.CreateR
 		return
 	}
 
-	db, err := r.ctx.Client.CreateDatabase(ctx, data.Name.ValueString())
+	_, err := r.ctx.Client.CreateDatabase(ctx, data.Name.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError(fmt.Sprintf("Error creating database %s", data.Name.ValueString()), err.Error())
 		return
 	}
 
-	data.Id = types.Int64Value(db.Id)
-	tflog.Debug(ctx, fmt.Sprintf("Created database %s with id %d", data.Name.ValueString(), data.Id.ValueInt64()))
+	data.Id = types.StringValue(fmt.Sprintf("%s/%s", r.ctx.ServerID, data.Name.ValueString()))
+	tflog.Debug(ctx, fmt.Sprintf("Created database %s", data.Name.ValueString()))
 
 	// Apply database options if any are set
 	if err := r.applyDatabaseOptions(ctx, &data); err != nil {
@@ -223,18 +227,39 @@ func (r *MssqlDatabaseResource) Read(ctx context.Context, req resource.ReadReque
 		return
 	}
 
-	db, err := r.ctx.Client.GetDatabaseById(ctx, state.Id.ValueInt64())
-
-	if errors.Is(err, sql.ErrNoRows) {
-		resp.Diagnostics.AddWarning("Database not found, removing from state", fmt.Sprintf("Database %s (id: %d) not found, removing from state", state.Name.ValueString(), state.Id.ValueInt64()))
-		resp.State.RemoveResource(ctx)
-		return
-	} else if err != nil {
-		resp.Diagnostics.AddError("Unable to read database", fmt.Sprintf("Unable to read database %s (id: %d). Error: %s", state.Name.ValueString(), state.Id.ValueInt64(), err))
+	databaseName := state.Name.ValueString()
+	if state.Name.IsUnknown() || state.Name.IsNull() || databaseName == "" {
+		if id := state.Id.ValueString(); id != "" {
+			parts := strings.Split(id, "/")
+			switch len(parts) {
+			case 2:
+				if parts[0] == r.ctx.ServerID {
+					databaseName = parts[1]
+				} else {
+					databaseName = parts[0]
+				}
+			case 1:
+				databaseName = parts[0]
+			}
+		}
+	}
+	if databaseName == "" {
+		resp.Diagnostics.AddError("Unable to read database", "Database name is missing from state")
 		return
 	}
 
-	state.Id = types.Int64Value(db.Id)
+	db, err := r.ctx.Client.GetDatabase(ctx, databaseName)
+
+	if errors.Is(err, sql.ErrNoRows) {
+		resp.Diagnostics.AddWarning("Database not found, removing from state", fmt.Sprintf("Database %s not found, removing from state", databaseName))
+		resp.State.RemoveResource(ctx)
+		return
+	} else if err != nil {
+		resp.Diagnostics.AddError("Unable to read database", fmt.Sprintf("Unable to read database %s. Error: %s", databaseName, err))
+		return
+	}
+
+	state.Id = types.StringValue(fmt.Sprintf("%s/%s", r.ctx.ServerID, db.Name))
 	state.Name = types.StringValue(db.Name)
 
 	if err := r.refreshDatabaseState(ctx, &state); err != nil {

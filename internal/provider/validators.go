@@ -68,3 +68,35 @@ func (v databasePermissionValidator) ValidateString(ctx context.Context, req val
 		return
 	}
 }
+
+type objectTypeValidator struct{}
+
+func (v objectTypeValidator) Description(ctx context.Context) string {
+	return "Validates that object_type is one of SCHEMA, OBJECT, TABLE, VIEW, PROCEDURE, FUNCTION, or PROC."
+}
+
+func (v objectTypeValidator) MarkdownDescription(ctx context.Context) string {
+	return v.Description(ctx)
+}
+
+func (v objectTypeValidator) ValidateString(ctx context.Context, req validator.StringRequest, resp *validator.StringResponse) {
+	if req.ConfigValue.IsUnknown() || req.ConfigValue.IsNull() {
+		return
+	}
+
+	raw := strings.ToUpper(strings.TrimSpace(req.ConfigValue.ValueString()))
+	if raw == "" {
+		return
+	}
+
+	switch raw {
+	case "SCHEMA", "OBJECT", "TABLE", "VIEW", "PROCEDURE", "FUNCTION", "PROC":
+		return
+	default:
+		resp.Diagnostics.AddAttributeError(
+			req.Path,
+			"Invalid object type",
+			fmt.Sprintf("object_type must be one of SCHEMA, OBJECT, TABLE, VIEW, PROCEDURE, FUNCTION, or PROC; got %q", req.ConfigValue.ValueString()),
+		)
+	}
+}

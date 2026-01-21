@@ -50,8 +50,7 @@ func (r *MssqlUserResource) Metadata(ctx context.Context, req resource.MetadataR
 
 func (r *MssqlUserResource) Schema(ctx context.Context, req resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		// This description is used by the documentation generator and the language server.
-		MarkdownDescription: "MssqlUser resource",
+		MarkdownDescription: "Manages a SQL Server database user. Supports both contained users (with password) and login-based users (mapped to a server login).",
 
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
@@ -70,24 +69,33 @@ func (r *MssqlUserResource) Schema(ctx context.Context, req resource.SchemaReque
 				},
 			},
 			"username": schema.StringAttribute{
-				MarkdownDescription: "MssqlUser configurable attribute with default value",
+				MarkdownDescription: "Database user name. Changing this forces a new resource to be created.",
 				Required:            true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
 			},
 			"password": schema.StringAttribute{
-				Required:  true,
+				Optional:  true,
 				Sensitive: true,
-				MarkdownDescription: "Password for the user account. Must follow strong password policies defined for SQL server. " +
+				MarkdownDescription: "Password for contained database users. Must follow strong password policies defined for SQL server. " +
 					"Passwords are case-sensitive, length must be 8-128 chars, can include all characters except `'` or `name`.\n\n" +
-					"~> **Note** Password will be stored in the raw state as plain-text. [Read more about sensitive data in state](https://www.terraform.io/language/state/sensitive-data).",
+					"~> **Note** Password will be stored in the raw state as plain-text. [Read more about sensitive data in state](https://www.terraform.io/language/state/sensitive-data).\n\n" +
+					"~> **Note** Either `password` or `login_name` must be specified, but not both. Use `password` for contained database users (Azure SQL) or `login_name` for traditional login-mapped users (RDS SQL Server).",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
+			"login_name": schema.StringAttribute{
+				MarkdownDescription: "Name of the server login to map this user to. Use this for traditional login-based users (e.g., RDS SQL Server). " +
+					"When set, the user is created with `CREATE USER ... FOR LOGIN ...`. Mutually exclusive with `password`.",
+				Optional: true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
+			},
 			"external": schema.BoolAttribute{
-				MarkdownDescription: "Is this an external user (like Microsoft EntraID)",
+				MarkdownDescription: "Is this an external user (like Microsoft EntraID). Mutually exclusive with `password` and `login_name`.",
 				Optional:            true,
 				Computed:            true,
 				Default:             booldefault.StaticBool(false),
@@ -96,7 +104,7 @@ func (r *MssqlUserResource) Schema(ctx context.Context, req resource.SchemaReque
 				},
 			},
 			"sid": schema.StringAttribute{
-				MarkdownDescription: "Set custom SID for the user",
+				MarkdownDescription: "Set custom SID for the user.",
 				Optional:            true,
 				Computed:            true,
 				PlanModifiers: []planmodifier.String{
@@ -105,16 +113,10 @@ func (r *MssqlUserResource) Schema(ctx context.Context, req resource.SchemaReque
 				},
 			},
 			"default_schema": schema.StringAttribute{
-				Optional: true,
-				Computed: true,
-				Default:  stringdefault.StaticString("dbo"),
-			},
-			"login_name": schema.StringAttribute{
-				MarkdownDescription: "For login-mapped users, the server login name. Null for contained users and external users.",
+				MarkdownDescription: "Default schema for the user. Defaults to `dbo`.",
+				Optional:            true,
 				Computed:            true,
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
-				},
+				Default:             stringdefault.StaticString("dbo"),
 			},
 		},
 	}
@@ -155,9 +157,32 @@ func (r *MssqlUserResource) Create(ctx context.Context, req resource.CreateReque
 		data.Database = types.StringValue(database)
 	}
 
+	hasPassword := !data.Password.IsNull() && data.Password.ValueString() != ""
+	hasLoginName := !data.LoginName.IsNull() && data.LoginName.ValueString() != ""
+	isExternal := data.External.ValueBool()
+
+	if hasPassword && hasLoginName {
+		resp.Diagnostics.AddError("Invalid configuration",
+			"Cannot specify both 'password' and 'login_name'. Use 'password' for contained database users or 'login_name' for login-based users.")
+		return
+	}
+
+	if isExternal && (hasPassword || hasLoginName) {
+		resp.Diagnostics.AddError("Invalid configuration",
+			"External users cannot have 'password' or 'login_name' specified.")
+		return
+	}
+
+	if !hasPassword && !hasLoginName && !isExternal {
+		resp.Diagnostics.AddError("Invalid configuration",
+			"Either 'password', 'login_name', or 'external = true' must be specified.")
+		return
+	}
+
 	create := mssql.CreateUser{
 		Username:      data.Username.ValueString(),
 		Password:      data.Password.ValueString(),
+		LoginName:     data.LoginName.ValueString(),
 		Sid:           data.Sid.ValueString(),
 		External:      data.External.ValueBool(),
 		DefaultSchema: data.DefaultSchema.ValueString(),

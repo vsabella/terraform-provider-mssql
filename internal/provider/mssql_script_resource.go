@@ -51,7 +51,7 @@ delete_script is only executed when the resource is destroyed (not when version 
 
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
-				MarkdownDescription: "Resource identifier in format `<database_name>/<name>`.",
+				MarkdownDescription: "Resource identifier in format `<server_id>/<database>/<name>` where `server_id` is `host:port`.",
 				Computed:            true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
@@ -126,7 +126,7 @@ func (r *MssqlScriptResource) Create(ctx context.Context, req resource.CreateReq
 		return
 	}
 
-	data.Id = types.StringValue(fmt.Sprintf("%s/%s", data.DatabaseName.ValueString(), data.Name.ValueString()))
+	data.Id = types.StringValue(fmt.Sprintf("%s/%s/%s", r.ctx.ServerID, data.DatabaseName.ValueString(), data.Name.ValueString()))
 	tflog.Debug(ctx, fmt.Sprintf("Executed script %s in database %s", data.Name.ValueString(), data.DatabaseName.ValueString()))
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
