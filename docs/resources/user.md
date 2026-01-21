@@ -32,3 +32,4 @@ MssqlUser resource
 ### Read-Only
 
 - `id` (String) The ID of this resource.
+- `login_name` (String) For login-mapped users, the server login name. Null for contained users and external users.

@@ -115,14 +115,16 @@ func (m *client) GetUser(ctx context.Context, database string, username string) 
     P.[name] AS name,
     P.[type] AS type,
     CASE WHEN P.[type] IN ('E', 'X') THEN 1 ELSE 0 END AS ext,
-    COALESCE(P.[default_schema_name], '') AS default_schema_name
+    COALESCE(P.[default_schema_name], '') AS default_schema_name,
+    COALESCE(SP.[name], '') AS login_name
 FROM sys.database_principals P
+LEFT JOIN sys.server_principals SP ON P.[sid] = SP.[sid]
 WHERE P.[name] = @username`
 
 	tflog.Debug(ctx, fmt.Sprintf("Executing refresh query for username %s: command %s", username, cmd))
 	result := conn.QueryRowContext(ctx, cmd, sql.Named("username", username))
 
-	err = result.Scan(&user.Id, &user.Sid, &user.Username, &user.Type, &user.External, &user.DefaultSchema)
+	err = result.Scan(&user.Id, &user.Sid, &user.Username, &user.Type, &user.External, &user.DefaultSchema, &user.LoginName)
 	return user, err
 }
 
