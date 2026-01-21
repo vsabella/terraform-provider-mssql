@@ -587,3 +587,31 @@ func (m *client) CreateDatabase(ctx context.Context, name string) (Database, err
 	db, err = m.GetDatabase(ctx, name)
 	return db, err
 }
+
+func (m client) ExecScript(ctx context.Context, database string, script string) error {
+	db := strings.TrimSpace(database)
+	if db == "" {
+		// No explicit database requested; execute as-is in the current connection context.
+		_, err := m.conn.ExecContext(ctx, script)
+		if err != nil {
+			return fmt.Errorf("failed to execute script: %v", err)
+		}
+		return nil
+	}
+	// SQL Server database names are sysname (<= 128 chars).
+	if len(db) > 128 {
+		return fmt.Errorf("database name must be <= 128 characters")
+	}
+
+	cmd := `DECLARE @sql NVARCHAR(max);
+SET @sql = N'USE ' + QUOTENAME(@p1) + N'; ' + @p2;
+EXEC (@sql);`
+
+	tflog.Debug(ctx, fmt.Sprintf("Executing script in database %s", db))
+	_, err := m.conn.ExecContext(ctx, cmd, db, script)
+	if err != nil {
+		return fmt.Errorf("failed to execute script in database %s: %v", db, err)
+	}
+
+	return nil
+}
