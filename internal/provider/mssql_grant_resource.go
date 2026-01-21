@@ -255,7 +255,7 @@ func (r *MssqlGrantResource) Delete(ctx context.Context, req resource.DeleteRequ
 	database := data.Database.ValueString()
 	if data.Database.IsUnknown() || data.Database.IsNull() || database == "" {
 		// Try decode from ID for imports
-		if db, _, _, err := decodeGrantId(data.Id.ValueString()); err == nil {
+		if _, db, _, _, err := decodeGrantId(data.Id.ValueString()); err == nil {
 			database = db
 		} else {
 			database = r.ctx.Database

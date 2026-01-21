@@ -26,4 +26,4 @@ DB grant resource
 
 ### Read-Only
 
-- `id` (String) `<database>/<principal>/<permission>`.
+- `id` (String) `<server_id>/<database>/<principal>/<permission>` where server_id is `host:port`.
