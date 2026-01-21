@@ -133,7 +133,11 @@ func Test_CreateDatabase(t *testing.T) {
 		if err != nil {
 			t.Fatalf("CreateDatabase() error = %v", err)
 		}
-		defer c.conn.ExecContext(ctx, fmt.Sprintf("DROP DATABASE [%s]", db.Name))
+		defer func() {
+			if _, err := c.conn.ExecContext(ctx, fmt.Sprintf("DROP DATABASE [%s]", db.Name)); err != nil {
+				t.Logf("failed to drop database %s: %v", db.Name, err)
+			}
+		}()
 	})
 
 	t.Run("Create existing database", func(t *testing.T) {
@@ -142,7 +146,11 @@ func Test_CreateDatabase(t *testing.T) {
 		if err != nil {
 			t.Fatalf("setup create failed: %v", err)
 		}
-		defer c.conn.ExecContext(ctx, fmt.Sprintf("DROP DATABASE [%s]", db.Name))
+		defer func() {
+			if _, err := c.conn.ExecContext(ctx, fmt.Sprintf("DROP DATABASE [%s]", db.Name)); err != nil {
+				t.Logf("failed to drop database %s: %v", db.Name, err)
+			}
+		}()
 
 		if _, err := c.CreateDatabase(ctx, name); err == nil {
 			t.Fatalf("expected error creating existing database, got nil")
