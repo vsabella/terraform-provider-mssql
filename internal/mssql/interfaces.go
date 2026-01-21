@@ -37,6 +37,13 @@ type SqlClient interface {
 	CreateLogin(ctx context.Context, create CreateLogin) (Login, error)
 	UpdateLogin(ctx context.Context, update UpdateLogin) (Login, error)
 	DeleteLogin(ctx context.Context, name string) error
+
+	// Database options operations (target database specified by name parameter).
+	GetDatabaseOptions(ctx context.Context, name string) (DatabaseOptions, error)
+	SetDatabaseOptions(ctx context.Context, name string, opts DatabaseOptions) error
+	GetDatabaseScopedConfigurations(ctx context.Context, name string) ([]DatabaseScopedConfiguration, error)
+	SetDatabaseScopedConfiguration(ctx context.Context, name string, config DatabaseScopedConfiguration) error
+	ClearDatabaseScopedConfiguration(ctx context.Context, name string, configName string) error
 }
 
 type User struct {
@@ -85,6 +92,29 @@ type Role struct {
 type Database struct {
 	Id   int64
 	Name string
+}
+
+// DatabaseOptions represents ALTER DATABASE options.
+// Pointer fields indicate optional settings - nil means "don't change this setting".
+type DatabaseOptions struct {
+	Collation                   string
+	CompatibilityLevel          *int
+	RecoveryModel               *string
+	ReadCommittedSnapshot       *bool
+	AllowSnapshotIsolation      *bool
+	AcceleratedDatabaseRecovery *bool
+	AutoClose                   *bool
+	AutoShrink                  *bool
+	AutoCreateStats             *bool
+	AutoUpdateStats             *bool
+	AutoUpdateStatsAsync        *bool
+}
+
+// DatabaseScopedConfiguration represents ALTER DATABASE SCOPED CONFIGURATION settings.
+type DatabaseScopedConfiguration struct {
+	Name              string
+	Value             string
+	ValueForSecondary string
 }
 
 // Login represents a SQL Server login (server-level principal).
