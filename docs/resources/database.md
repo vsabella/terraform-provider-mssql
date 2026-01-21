@@ -3,12 +3,12 @@
 page_title: "mssql_database Resource - mssql"
 subcategory: ""
 description: |-
-  MssqlDatabase resource
+  Manages a SQL Server database including engine options and scoped configurations. Note: Destroy removes the resource from Terraform state but does not drop the database from the server.
 ---
 
 # mssql_database (Resource)
 
-MssqlDatabase resource
+Manages a SQL Server database including engine options and scoped configurations. **Note:** Destroy removes the resource from Terraform state but does not drop the database from the server.
 
 
 
@@ -19,6 +19,33 @@ MssqlDatabase resource
 
 - `name` (String) Database name.
 
+### Optional
+
+- `accelerated_database_recovery` (Boolean) Enable Accelerated Database Recovery (ADR). Available in SQL Server 2019+ and Azure SQL. If not specified, the existing database setting is preserved.
+- `allow_snapshot_isolation` (Boolean) Allow SNAPSHOT isolation level. If not specified, the existing database setting is preserved.
+- `auto_close` (Boolean) Automatically close the database when the last user exits. If not specified, the existing database setting is preserved.
+- `auto_create_stats` (Boolean) Automatically create statistics on columns. If not specified, the existing database setting is preserved.
+- `auto_shrink` (Boolean) Automatically shrink the database files. Not recommended for production. If not specified, the existing database setting is preserved.
+- `auto_update_stats` (Boolean) Automatically update statistics. If not specified, the existing database setting is preserved.
+- `auto_update_stats_async` (Boolean) Update statistics asynchronously. If not specified, the existing database setting is preserved.
+- `collation` (String) Database collation. If not specified, uses the server default collation.
+- `compatibility_level` (Number) Database compatibility level (e.g., 150 for SQL Server 2019, 160 for SQL Server 2022). If not specified, the existing setting is preserved.
+- `read_committed_snapshot` (Boolean) Enable READ_COMMITTED_SNAPSHOT isolation. If not specified, the existing database setting is preserved.
+- `recovery_model` (String) Recovery model: FULL, BULK_LOGGED, or SIMPLE. If not specified, the existing setting is preserved.
+- `scoped_configuration` (Block Set) Database scoped configuration settings (ALTER DATABASE SCOPED CONFIGURATION). (see [below for nested schema](#nestedblock--scoped_configuration))
+
 ### Read-Only
 
 - `id` (Number) Database ID. Can be retrieved using `SELECT DB_ID('<db_name>')`.
+
+<a id="nestedblock--scoped_configuration"></a>
+### Nested Schema for `scoped_configuration`
+
+Required:
+
+- `name` (String) Configuration name (e.g., MAXDOP, LEGACY_CARDINALITY_ESTIMATION).
+- `value` (String) Configuration value.
+
+Optional:
+
+- `value_for_secondary` (String) Configuration value for secondary replicas (optional).
