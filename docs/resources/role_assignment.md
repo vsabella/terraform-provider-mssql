@@ -3,12 +3,12 @@
 page_title: "mssql_role_assignment Resource - mssql"
 subcategory: ""
 description: |-
-  MssqlUser resource
+  Assigns a principal to a database role or server role.
 ---
 
 # mssql_role_assignment (Resource)
 
-MssqlUser resource
+Assigns a principal to a database role or server role.
 
 
 
