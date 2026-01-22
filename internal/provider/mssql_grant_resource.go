@@ -57,17 +57,17 @@ func grantToId(serverID string, grant mssql.GrantPermission) string {
 	return strings.Join(parts, "/")
 }
 
-func decodeGrantId(id string) (string, mssql.GrantPermission, error) {
+func decodeGrantId(id string) (mssql.GrantPermission, error) {
 	parts := strings.Split(id, "/")
 	if len(parts) < 4 {
-		return "", mssql.GrantPermission{}, fmt.Errorf("expected id in format <server_id>/<database>/<principal>/<permission>[/object_type/object_name], got %q", id)
+		return mssql.GrantPermission{}, fmt.Errorf("expected id in format <server_id>/<database>/<principal>/<permission>[/object_type/object_name], got %q", id)
 	}
 
 	switch len(parts) {
 	case 4, 6:
 		// ok
 	default:
-		return "", mssql.GrantPermission{}, fmt.Errorf("expected id in format <server_id>/<database>/<principal>/<permission>[/object_type/object_name], got %q", id)
+		return mssql.GrantPermission{}, fmt.Errorf("expected id in format <server_id>/<database>/<principal>/<permission>[/object_type/object_name], got %q", id)
 	}
 
 	decode := func(s string) (string, error) {
@@ -76,23 +76,23 @@ func decodeGrantId(id string) (string, mssql.GrantPermission, error) {
 
 	serverID, err := decode(parts[0])
 	if err != nil {
-		return "", mssql.GrantPermission{}, err
+		return mssql.GrantPermission{}, err
 	}
 	if serverID == "" {
-		return "", mssql.GrantPermission{}, fmt.Errorf("expected id in format <server_id>/<database>/<principal>/<permission>[/object_type/object_name], got %q", id)
+		return mssql.GrantPermission{}, fmt.Errorf("expected id in format <server_id>/<database>/<principal>/<permission>[/object_type/object_name], got %q", id)
 	}
 
 	db, err := decode(parts[1])
 	if err != nil {
-		return "", mssql.GrantPermission{}, err
+		return mssql.GrantPermission{}, err
 	}
 	principal, err := decode(parts[2])
 	if err != nil {
-		return "", mssql.GrantPermission{}, err
+		return mssql.GrantPermission{}, err
 	}
 	permission, err := decode(parts[3])
 	if err != nil {
-		return "", mssql.GrantPermission{}, err
+		return mssql.GrantPermission{}, err
 	}
 
 	grant := mssql.GrantPermission{
@@ -104,17 +104,17 @@ func decodeGrantId(id string) (string, mssql.GrantPermission, error) {
 	if len(parts) == 6 {
 		objectType, err := decode(parts[4])
 		if err != nil {
-			return "", mssql.GrantPermission{}, err
+			return mssql.GrantPermission{}, err
 		}
 		objectName, err := decode(parts[5])
 		if err != nil {
-			return "", mssql.GrantPermission{}, err
+			return mssql.GrantPermission{}, err
 		}
 		grant.ObjectType = objectType
 		grant.ObjectName = objectName
 	}
 
-	return serverID, grant, nil
+	return grant, nil
 }
 
 func (r *MssqlGrantResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -266,7 +266,7 @@ func (r *MssqlGrantResource) Read(ctx context.Context, req resource.ReadRequest,
 
 	database := data.Database.ValueString()
 	if data.Database.IsUnknown() || data.Database.IsNull() || database == "" {
-		_, decoded, err := decodeGrantId(data.Id.ValueString())
+		decoded, err := decodeGrantId(data.Id.ValueString())
 		if err != nil {
 			resp.Diagnostics.AddError("Invalid grant ID", err.Error())
 			return
@@ -347,7 +347,7 @@ func (r *MssqlGrantResource) Delete(ctx context.Context, req resource.DeleteRequ
 
 	database := data.Database.ValueString()
 	if data.Database.IsUnknown() || data.Database.IsNull() || database == "" {
-		_, decoded, err := decodeGrantId(data.Id.ValueString())
+		decoded, err := decodeGrantId(data.Id.ValueString())
 		if err != nil {
 			resp.Diagnostics.AddError("Invalid grant ID", err.Error())
 			return
@@ -382,7 +382,7 @@ func (r *MssqlGrantResource) Delete(ctx context.Context, req resource.DeleteRequ
 }
 
 func (r *MssqlGrantResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	_, grant, err := decodeGrantId(req.ID)
+	grant, err := decodeGrantId(req.ID)
 	if err != nil {
 		resp.Diagnostics.AddError("Invalid import ID", err.Error())
 		return
