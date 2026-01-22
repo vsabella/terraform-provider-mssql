@@ -5,14 +5,16 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
+	"strings"
 	"sync"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	"github.com/vsabella/terraform-provider-mssql/internal/core"
@@ -33,7 +35,7 @@ type MssqlDatabaseResource struct {
 }
 
 type MssqlDatabaseResourceModel struct {
-	Id                          types.Int64  `tfsdk:"id"`
+	Id                          types.String `tfsdk:"id"`
 	Name                        types.String `tfsdk:"name"`
 	Collation                   types.String `tfsdk:"collation"`
 	CompatibilityLevel          types.Int64  `tfsdk:"compatibility_level"`
@@ -64,19 +66,22 @@ func (r *MssqlDatabaseResource) Schema(ctx context.Context, req resource.SchemaR
 		MarkdownDescription: "Manages a SQL Server database including engine options and scoped configurations. **Note:** Destroy removes the resource from Terraform state but does not drop the database from the server.",
 
 		Attributes: map[string]schema.Attribute{
-			"id": schema.Int64Attribute{
-				MarkdownDescription: "Database ID. Can be retrieved using `SELECT DB_ID('<db_name>')`.",
+			"id": schema.StringAttribute{
+				MarkdownDescription: "Resource identifier in format `<server_id>/<database>` where `server_id` is `host:port`.",
 				Computed:            true,
-				PlanModifiers: []planmodifier.Int64{
-					int64planmodifier.UseStateForUnknown(),
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
 			"name": schema.StringAttribute{
-				MarkdownDescription: "Database name.",
+				MarkdownDescription: "Database name. Changing this forces a new resource to be created.",
 				Required:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
 			},
 			"collation": schema.StringAttribute{
-				MarkdownDescription: "Database collation. If not specified, uses the server default collation.",
+				MarkdownDescription: "Database collation. If not specified, uses the server default collation. Changing this updates the database default for new objects only; existing columns keep their current collations and a change may require downtime.",
 				Optional:            true,
 				Computed:            true,
 			},
@@ -186,14 +191,14 @@ func (r *MssqlDatabaseResource) Create(ctx context.Context, req resource.CreateR
 		return
 	}
 
-	db, err := r.ctx.Client.CreateDatabase(ctx, data.Name.ValueString())
+	_, err := r.ctx.Client.CreateDatabase(ctx, data.Name.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError(fmt.Sprintf("Error creating database %s", data.Name.ValueString()), err.Error())
 		return
 	}
 
-	data.Id = types.Int64Value(db.Id)
-	tflog.Debug(ctx, fmt.Sprintf("Created database %s with id %d", data.Name.ValueString(), data.Id.ValueInt64()))
+	data.Id = types.StringValue(fmt.Sprintf("%s/%s", r.ctx.ServerID, data.Name.ValueString()))
+	tflog.Debug(ctx, fmt.Sprintf("Created database %s", data.Name.ValueString()))
 
 	// Apply database options if any are set
 	if err := r.applyDatabaseOptions(ctx, &data); err != nil {
@@ -223,18 +228,32 @@ func (r *MssqlDatabaseResource) Read(ctx context.Context, req resource.ReadReque
 		return
 	}
 
-	db, err := r.ctx.Client.GetDatabaseById(ctx, state.Id.ValueInt64())
-
-	if errors.Is(err, sql.ErrNoRows) {
-		resp.Diagnostics.AddWarning("Database not found, removing from state", fmt.Sprintf("Database %s (id: %d) not found, removing from state", state.Name.ValueString(), state.Id.ValueInt64()))
-		resp.State.RemoveResource(ctx)
-		return
-	} else if err != nil {
-		resp.Diagnostics.AddError("Unable to read database", fmt.Sprintf("Unable to read database %s (id: %d). Error: %s", state.Name.ValueString(), state.Id.ValueInt64(), err))
+	databaseName := state.Name.ValueString()
+	if state.Name.IsUnknown() || state.Name.IsNull() || databaseName == "" {
+		dbName, err := parseDatabaseId(state.Id.ValueString())
+		if err != nil {
+			resp.Diagnostics.AddError("Invalid database ID", err.Error())
+			return
+		}
+		databaseName = dbName
+	}
+	if databaseName == "" {
+		resp.Diagnostics.AddError("Unable to read database", "Database name is missing from state")
 		return
 	}
 
-	state.Id = types.Int64Value(db.Id)
+	db, err := r.ctx.Client.GetDatabase(ctx, databaseName)
+
+	if errors.Is(err, sql.ErrNoRows) {
+		resp.Diagnostics.AddWarning("Database not found, removing from state", fmt.Sprintf("Database %s not found, removing from state", databaseName))
+		resp.State.RemoveResource(ctx)
+		return
+	} else if err != nil {
+		resp.Diagnostics.AddError("Unable to read database", fmt.Sprintf("Unable to read database %s. Error: %s", databaseName, err))
+		return
+	}
+
+	state.Id = types.StringValue(fmt.Sprintf("%s/%s", r.ctx.ServerID, db.Name))
 	state.Name = types.StringValue(db.Name)
 
 	if err := r.refreshDatabaseState(ctx, &state); err != nil {
@@ -260,6 +279,17 @@ func (r *MssqlDatabaseResource) Update(ctx context.Context, req resource.UpdateR
 	if plan.Name.ValueString() != state.Name.ValueString() {
 		resp.Diagnostics.AddError("Unable to update database", fmt.Sprintf("Updating database name is not supported. Database name cannot be changed from %s to %s.", state.Name.ValueString(), plan.Name.ValueString()))
 		return
+	}
+
+	if !plan.Collation.IsNull() && !plan.Collation.IsUnknown() && !state.Collation.IsNull() && !state.Collation.IsUnknown() {
+		desired := strings.TrimSpace(plan.Collation.ValueString())
+		current := strings.TrimSpace(state.Collation.ValueString())
+		if desired != "" && !strings.EqualFold(desired, current) {
+			resp.Diagnostics.AddWarning(
+				"Collation change affects only new objects",
+				"Updating database collation changes the default for new objects only; existing columns retain their current collations. This operation can be disruptive and may require downtime.",
+			)
+		}
 	}
 
 	var priorConfigs []ScopedConfigurationModel
@@ -310,7 +340,94 @@ func (r *MssqlDatabaseResource) Delete(ctx context.Context, req resource.DeleteR
 }
 
 func (r *MssqlDatabaseResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+	// Import ID must be <server_id>/<database>
+	dbName, err := parseDatabaseId(req.ID)
+	if err != nil {
+		resp.Diagnostics.AddError("Invalid import ID", err.Error())
+		return
+	}
+
+	db, err := r.ctx.Client.GetDatabase(ctx, dbName)
+	if err != nil {
+		resp.Diagnostics.AddError("Unable to import database", fmt.Sprintf("Database %s not found or error occurred: %s", dbName, err))
+		return
+	}
+
+	// Do NOT import all existing scoped configurations into state.
+	// We only want to manage the scoped_configuration blocks explicitly declared in config.
+	// Importing the full server view here can cause Terraform to plan clearing unrelated settings.
+
+	// Set basic attributes
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), fmt.Sprintf("%s/%s", r.ctx.ServerID, db.Name))...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("name"), db.Name)...)
+
+	// Get database options
+	opts, err := r.ctx.Client.GetDatabaseOptions(ctx, db.Name)
+	if err == nil {
+		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("collation"), opts.Collation)...)
+		if opts.CompatibilityLevel != nil {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("compatibility_level"), int64(*opts.CompatibilityLevel))...)
+		} else {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("compatibility_level"), types.Int64Null())...)
+		}
+		if opts.RecoveryModel != nil {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("recovery_model"), *opts.RecoveryModel)...)
+		} else {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("recovery_model"), types.StringNull())...)
+		}
+		if opts.ReadCommittedSnapshot != nil {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("read_committed_snapshot"), *opts.ReadCommittedSnapshot)...)
+		} else {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("read_committed_snapshot"), types.BoolNull())...)
+		}
+		if opts.AllowSnapshotIsolation != nil {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("allow_snapshot_isolation"), *opts.AllowSnapshotIsolation)...)
+		} else {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("allow_snapshot_isolation"), types.BoolNull())...)
+		}
+		if opts.AcceleratedDatabaseRecovery != nil {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("accelerated_database_recovery"), *opts.AcceleratedDatabaseRecovery)...)
+		} else {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("accelerated_database_recovery"), types.BoolNull())...)
+		}
+		if opts.AutoClose != nil {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("auto_close"), *opts.AutoClose)...)
+		} else {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("auto_close"), types.BoolNull())...)
+		}
+		if opts.AutoShrink != nil {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("auto_shrink"), *opts.AutoShrink)...)
+		} else {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("auto_shrink"), types.BoolNull())...)
+		}
+		if opts.AutoCreateStats != nil {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("auto_create_stats"), *opts.AutoCreateStats)...)
+		} else {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("auto_create_stats"), types.BoolNull())...)
+		}
+		if opts.AutoUpdateStats != nil {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("auto_update_stats"), *opts.AutoUpdateStats)...)
+		} else {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("auto_update_stats"), types.BoolNull())...)
+		}
+		if opts.AutoUpdateStatsAsync != nil {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("auto_update_stats_async"), *opts.AutoUpdateStatsAsync)...)
+		} else {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("auto_update_stats_async"), types.BoolNull())...)
+		}
+	}
+}
+
+func parseDatabaseId(id string) (string, error) {
+	parts := strings.Split(id, "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", fmt.Errorf("expected id in format <server_id>/<database>, got %q", id)
+	}
+	db, err := url.QueryUnescape(parts[1])
+	if err != nil {
+		return "", err
+	}
+	return db, nil
 }
 
 func (r *MssqlDatabaseResource) applyDatabaseOptions(ctx context.Context, data *MssqlDatabaseResourceModel) error {

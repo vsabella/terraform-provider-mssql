@@ -3,6 +3,8 @@ package provider
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -47,11 +49,22 @@ Use this resource to install tools, run bootstrap scripts, or execute any SQL th
 
 The script is executed on create and when the version changes. Terraform tracks the version in state to determine when to re-run the script.
 
-delete_script is only executed when the resource is destroyed (not when version changes).`,
+delete_script is only executed when the resource is destroyed (not when version changes).
+
+**Example usage:**
+` + "```hcl" + `
+resource "mssql_script" "first_responder_kit" {
+  database_name = "master"
+  name          = "first_responder_kit"
+  create_script = file("${path.module}/install-blitz.sql")
+  delete_script = "DROP PROC sp_Blitz"
+  version       = md5(file("${path.module}/install-blitz.sql"))
+}
+` + "```",
 
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
-				MarkdownDescription: "Resource identifier in format `<database_name>/<name>`.",
+				MarkdownDescription: "Resource identifier in format `<server_id>/<database>/<name>` where `server_id` is `host:port`.",
 				Computed:            true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
@@ -126,7 +139,7 @@ func (r *MssqlScriptResource) Create(ctx context.Context, req resource.CreateReq
 		return
 	}
 
-	data.Id = types.StringValue(fmt.Sprintf("%s/%s", data.DatabaseName.ValueString(), data.Name.ValueString()))
+	data.Id = types.StringValue(fmt.Sprintf("%s/%s/%s", r.ctx.ServerID, data.DatabaseName.ValueString(), data.Name.ValueString()))
 	tflog.Debug(ctx, fmt.Sprintf("Executed script %s in database %s", data.Name.ValueString(), data.DatabaseName.ValueString()))
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
@@ -211,5 +224,30 @@ func (r *MssqlScriptResource) Delete(ctx context.Context, req resource.DeleteReq
 }
 
 func (r *MssqlScriptResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+	// Import ID must be <server_id>/<database>/<name>
+	database, name, err := parseScriptId(req.ID)
+	if err != nil {
+		resp.Diagnostics.AddError("Invalid import ID", err.Error())
+		return
+	}
+
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("database_name"), database)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("name"), name)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), fmt.Sprintf("%s/%s/%s", r.ctx.ServerID, database, name))...)
+}
+
+func parseScriptId(id string) (string, string, error) {
+	parts := strings.Split(id, "/")
+	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+		return "", "", fmt.Errorf("expected id in format <server_id>/<database>/<name>, got %q", id)
+	}
+	db, err := url.QueryUnescape(parts[1])
+	if err != nil {
+		return "", "", err
+	}
+	name, err := url.QueryUnescape(parts[2])
+	if err != nil {
+		return "", "", err
+	}
+	return db, name, nil
 }

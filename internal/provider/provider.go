@@ -5,6 +5,7 @@ package provider
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
@@ -114,7 +115,7 @@ func (p *MssqlProvider) Configure(ctx context.Context, req provider.ConfigureReq
 	if data.Database.IsUnknown() || data.Database.IsNull() || data.Database.ValueString() == "" {
 		resp.Diagnostics.AddWarning(
 			"Unknown Sql Server Database, defaults to 'master'",
-			"The provider is designed for Contained Databases and will only connect to a single database at a time. If not provided, the provider will default to 'master'.",
+			"If not provided, the provider will default to 'master'. Database-scoped resources can target other databases using their `database` attribute.",
 		)
 		data.Database = types.StringValue("master")
 	}
@@ -156,8 +157,10 @@ func (p *MssqlProvider) Configure(ctx context.Context, req provider.ConfigureReq
 	if data.Port.IsNull() || port <= 0 {
 		port = 1433
 	}
+	serverID := fmt.Sprintf("%s:%d", host, port)
 	client := &core.ProviderData{
 		Client:   mssql.NewClient(host, port, data.Database.ValueString(), data.SqlAuth.Username.ValueString(), data.SqlAuth.Password.ValueString()),
+		ServerID: serverID,
 		Database: data.Database.ValueString(),
 	}
 

@@ -17,7 +17,7 @@ Manages a SQL Server database including engine options and scoped configurations
 
 ### Required
 
-- `name` (String) Database name.
+- `name` (String) Database name. Changing this forces a new resource to be created.
 
 ### Optional
 
@@ -28,7 +28,7 @@ Manages a SQL Server database including engine options and scoped configurations
 - `auto_shrink` (Boolean) Automatically shrink the database files. Not recommended for production. If not specified, the existing database setting is preserved.
 - `auto_update_stats` (Boolean) Automatically update statistics. If not specified, the existing database setting is preserved.
 - `auto_update_stats_async` (Boolean) Update statistics asynchronously. If not specified, the existing database setting is preserved.
-- `collation` (String) Database collation. If not specified, uses the server default collation.
+- `collation` (String) Database collation. If not specified, uses the server default collation. Changing this updates the database default for new objects only; existing columns keep their current collations and a change may require downtime.
 - `compatibility_level` (Number) Database compatibility level (e.g., 150 for SQL Server 2019, 160 for SQL Server 2022). If not specified, the existing setting is preserved.
 - `read_committed_snapshot` (Boolean) Enable READ_COMMITTED_SNAPSHOT isolation. If not specified, the existing database setting is preserved.
 - `recovery_model` (String) Recovery model: FULL, BULK_LOGGED, or SIMPLE. If not specified, the existing setting is preserved.
@@ -36,7 +36,7 @@ Manages a SQL Server database including engine options and scoped configurations
 
 ### Read-Only
 
-- `id` (Number) Database ID. Can be retrieved using `SELECT DB_ID('<db_name>')`.
+- `id` (String) Resource identifier in format `<server_id>/<database>` where `server_id` is `host:port`.
 
 <a id="nestedblock--scoped_configuration"></a>
 ### Nested Schema for `scoped_configuration`

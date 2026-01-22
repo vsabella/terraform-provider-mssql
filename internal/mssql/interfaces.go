@@ -14,10 +14,16 @@ type SqlClient interface {
 	ReadRoleMembership(ctx context.Context, database string, id string) (RoleMembership, error)
 	AssignRole(ctx context.Context, database string, role string, principal string) (RoleMembership, error)
 	UnassignRole(ctx context.Context, database string, role string, principal string) error
+	ReadServerRoleMembership(ctx context.Context, role string, principal string) (RoleMembership, error)
+	AssignServerRole(ctx context.Context, role string, principal string) (RoleMembership, error)
+	UnassignServerRole(ctx context.Context, role string, principal string) error
 
 	ReadDatabasePermission(ctx context.Context, database string, id string) (DatabaseGrantPermission, error)
 	GrantDatabasePermission(ctx context.Context, database string, principal string, permission string) (DatabaseGrantPermission, error)
 	RevokeDatabasePermission(ctx context.Context, database string, principal string, permission string) error
+	ReadPermission(ctx context.Context, grant GrantPermission) (GrantPermission, error)
+	GrantPermission(ctx context.Context, grant GrantPermission) (GrantPermission, error)
+	RevokePermission(ctx context.Context, grant GrantPermission) error
 
 	GetRole(ctx context.Context, database string, name string) (Role, error)
 	CreateRole(ctx context.Context, database string, name string) (Role, error)
@@ -70,6 +76,7 @@ type CreateUser struct {
 	Sid           string
 	External      bool
 	DefaultSchema string
+	LoginName     string
 }
 
 type UpdateUser struct {
@@ -82,6 +89,16 @@ type DatabaseGrantPermission struct {
 	Id         string
 	Principal  string
 	Permission string
+}
+
+// GrantPermission represents a permission grant with optional object targeting.
+type GrantPermission struct {
+	Id         string
+	Database   string
+	Principal  string
+	Permission string
+	ObjectType string
+	ObjectName string
 }
 
 type Role struct {

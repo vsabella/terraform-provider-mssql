@@ -25,4 +25,4 @@ MssqlRole resource
 
 ### Read-Only
 
-- `id` (String) The ID of this resource.
+- `id` (String) Resource identifier in format `<server_id>/<database>/<role>` where `server_id` is `host:port`.
