@@ -47,6 +47,10 @@ func testAccPreCheck(t *testing.T) {
 	// You can add code here to run prior to any test case execution, for example assertions
 	// about the appropriate environment variables being set are common to see in a pre-check
 	// function.
+	if os.Getenv("TF_ACC") == "" {
+		t.Skip("TF_ACC not set; skipping acceptance tests")
+	}
+
 	pw := os.Getenv("MSSQL_SA_PASSWORD")
 	if pw == "" {
 		t.Fatal("MSSQL_SA_PASSWORD must be set for acceptance tests")
