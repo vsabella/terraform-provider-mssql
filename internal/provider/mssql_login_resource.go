@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -137,17 +138,15 @@ func loginToResourceWithServer(data *MssqlLoginResourceModel, login mssql.Login,
 }
 
 func parseLoginId(id string) (string, error) {
-	if id == "" {
-		return "", fmt.Errorf("expected id in format <server_id>/<login_name>, got empty string")
-	}
-	if !strings.Contains(id, "/") {
-		return id, nil
-	}
 	parts := strings.SplitN(id, "/", 2)
-	if len(parts) != 2 || parts[1] == "" {
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		return "", fmt.Errorf("expected id in format <server_id>/<login_name>, got %q", id)
 	}
-	return parts[1], nil
+	loginName, err := url.QueryUnescape(parts[1])
+	if err != nil {
+		return "", err
+	}
+	return loginName, nil
 }
 
 func (r *MssqlLoginResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
@@ -226,7 +225,7 @@ func (r *MssqlLoginResource) Delete(ctx context.Context, req resource.DeleteRequ
 }
 
 func (r *MssqlLoginResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	// Import ID: <server_id>/<login_name> or <login_name>
+	// Import ID: <server_id>/<login_name>
 	loginName, err := parseLoginId(req.ID)
 	if err != nil {
 		resp.Diagnostics.AddError("Invalid import ID", err.Error())

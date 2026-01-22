@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -54,7 +55,8 @@ func (r *MssqlUserResource) Schema(ctx context.Context, req resource.SchemaReque
 
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
-				Computed: true,
+				MarkdownDescription: "Resource identifier in format `<server_id>/<database>/<username>` where `server_id` is `host:port`.",
+				Computed:            true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
@@ -230,26 +232,14 @@ func (r *MssqlUserResource) Read(ctx context.Context, req resource.ReadRequest, 
 	}
 
 	database := data.Database.ValueString()
-	if data.Database.IsUnknown() || data.Database.IsNull() || database == "" {
-		if id := data.Id.ValueString(); id != "" {
-			parts := strings.Split(id, "/")
-			switch len(parts) {
-			case 2:
-				if parts[0] == r.ctx.ServerID {
-					database = r.ctx.Database
-					data.Username = types.StringValue(parts[1])
-				} else {
-					database = parts[0]
-					data.Username = types.StringValue(parts[1])
-				}
-			case 3:
-				database = parts[1]
-				data.Username = types.StringValue(parts[2])
-			}
+	if data.Database.IsUnknown() || data.Database.IsNull() || database == "" || data.Username.IsNull() || data.Username.ValueString() == "" {
+		dbName, username, err := parseUserId(data.Id.ValueString())
+		if err != nil {
+			resp.Diagnostics.AddError("Invalid user ID", err.Error())
+			return
 		}
-		if database == "" {
-			database = r.ctx.Database
-		}
+		database = dbName
+		data.Username = types.StringValue(username)
 	}
 
 	user, err := r.ctx.Client.GetUser(ctx, database, data.Username.ValueString())
@@ -312,26 +302,14 @@ func (r *MssqlUserResource) Delete(ctx context.Context, req resource.DeleteReque
 	}
 
 	database := data.Database.ValueString()
-	if data.Database.IsUnknown() || data.Database.IsNull() || database == "" {
-		if id := data.Id.ValueString(); id != "" {
-			parts := strings.Split(id, "/")
-			switch len(parts) {
-			case 2:
-				if parts[0] == r.ctx.ServerID {
-					database = r.ctx.Database
-					data.Username = types.StringValue(parts[1])
-				} else {
-					database = parts[0]
-					data.Username = types.StringValue(parts[1])
-				}
-			case 3:
-				database = parts[1]
-				data.Username = types.StringValue(parts[2])
-			}
+	if data.Database.IsUnknown() || data.Database.IsNull() || database == "" || data.Username.IsNull() || data.Username.ValueString() == "" {
+		dbName, username, err := parseUserId(data.Id.ValueString())
+		if err != nil {
+			resp.Diagnostics.AddError("Invalid user ID", err.Error())
+			return
 		}
-		if database == "" {
-			database = r.ctx.Database
-		}
+		database = dbName
+		data.Username = types.StringValue(username)
 	}
 
 	err := r.ctx.Client.DeleteUser(ctx, database, data.Username.ValueString())
@@ -342,40 +320,30 @@ func (r *MssqlUserResource) Delete(ctx context.Context, req resource.DeleteReque
 }
 
 func (r *MssqlUserResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	// Import formats:
-	// - <username> (uses provider database)
-	// - <database>/<username>
-	// - <server_id>/<username>
-	// - <server_id>/<database>/<username>
-	parts := strings.Split(req.ID, "/")
-	var database, username string
-
-	switch len(parts) {
-	case 1:
-		database = r.ctx.Database
-		username = parts[0]
-	case 2:
-		if parts[0] == r.ctx.ServerID {
-			database = r.ctx.Database
-			username = parts[1]
-		} else {
-			database = parts[0]
-			username = parts[1]
-		}
-	case 3:
-		database = parts[1]
-		username = parts[2]
-	default:
-		resp.Diagnostics.AddError("Invalid import ID", "expected <username>, <database>/<username>, <server_id>/<username>, or <server_id>/<database>/<username>")
-		return
-	}
-
-	if database == "" || username == "" {
-		resp.Diagnostics.AddError("Invalid import ID", "database and username must not be empty")
+	// Import ID must be <server_id>/<database>/<username>
+	database, username, err := parseUserId(req.ID)
+	if err != nil {
+		resp.Diagnostics.AddError("Invalid import ID", err.Error())
 		return
 	}
 
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("database"), database)...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("username"), username)...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), fmt.Sprintf("%s/%s/%s", r.ctx.ServerID, database, username))...)
+}
+
+func parseUserId(id string) (string, string, error) {
+	parts := strings.Split(id, "/")
+	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+		return "", "", fmt.Errorf("expected id in format <server_id>/<database>/<username>, got %q", id)
+	}
+	db, err := url.QueryUnescape(parts[1])
+	if err != nil {
+		return "", "", err
+	}
+	username, err := url.QueryUnescape(parts[2])
+	if err != nil {
+		return "", "", err
+	}
+	return db, username, nil
 }

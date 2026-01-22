@@ -34,4 +34,4 @@ Manages a SQL Server database user. Supports both contained users (with password
 
 ### Read-Only
 
-- `id` (String) The ID of this resource.
+- `id` (String) Resource identifier in format `<server_id>/<database>/<username>` where `server_id` is `host:port`.

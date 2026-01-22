@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -51,7 +52,8 @@ func (r *MssqlRoleAssignmentResource) Schema(ctx context.Context, req resource.S
 
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
-				Computed: true,
+				MarkdownDescription: "Resource identifier in format `<server_id>/db/<database>/<role>/<principal>` or `<server_id>/server/<role>/<principal>` where `server_id` is `host:port`.",
+				Computed:            true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
@@ -168,27 +170,21 @@ func (r *MssqlRoleAssignmentResource) Read(ctx context.Context, req resource.Rea
 
 	id := data.Id.ValueString()
 	isServer := data.ServerRole.ValueBool()
-	if data.ServerRole.IsNull() && strings.Contains(id, "/server/") {
-		isServer = true
-	}
 
 	// Parse ID if fields are missing.
-	if id != "" && (data.Role.IsNull() || data.Role.ValueString() == "" || data.Principal.IsNull() || data.Principal.ValueString() == "" || (data.Database.IsNull() && !isServer)) {
-		parts := strings.Split(id, "/")
-		if len(parts) >= 4 && parts[0] == r.ctx.ServerID {
-			parts = parts[1:]
+	if id != "" && (data.Role.IsNull() || data.Role.ValueString() == "" || data.Principal.IsNull() || data.Principal.ValueString() == "" || data.ServerRole.IsNull() || (data.Database.IsNull() && !isServer)) {
+		parsed, err := parseRoleAssignmentId(id)
+		if err != nil {
+			resp.Diagnostics.AddError("Invalid role assignment ID", err.Error())
+			return
 		}
-		if len(parts) >= 3 && parts[0] == "server" {
-			isServer = true
-			if len(parts) >= 3 {
-				data.Role = types.StringValue(parts[1])
-				data.Principal = types.StringValue(parts[2])
-			}
-		} else if len(parts) >= 4 && parts[0] == "db" {
-			isServer = false
-			data.Database = types.StringValue(parts[1])
-			data.Role = types.StringValue(parts[2])
-			data.Principal = types.StringValue(parts[3])
+		isServer = parsed.IsServer
+		data.Role = types.StringValue(parsed.Role)
+		data.Principal = types.StringValue(parsed.Principal)
+		if parsed.Database != "" {
+			data.Database = types.StringValue(parsed.Database)
+		} else {
+			data.Database = types.StringNull()
 		}
 	}
 
@@ -250,24 +246,20 @@ func (r *MssqlRoleAssignmentResource) Delete(ctx context.Context, req resource.D
 
 	id := data.Id.ValueString()
 	isServer := data.ServerRole.ValueBool()
-	if data.ServerRole.IsNull() && strings.Contains(id, "/server/") {
-		isServer = true
-	}
 
-	if id != "" && (data.Role.IsNull() || data.Principal.IsNull() || (data.Database.IsNull() && !isServer)) {
-		parts := strings.Split(id, "/")
-		if len(parts) >= 4 && parts[0] == r.ctx.ServerID {
-			parts = parts[1:]
+	if id != "" && (data.Role.IsNull() || data.Principal.IsNull() || data.ServerRole.IsNull() || (data.Database.IsNull() && !isServer)) {
+		parsed, err := parseRoleAssignmentId(id)
+		if err != nil {
+			resp.Diagnostics.AddError("Invalid role assignment ID", err.Error())
+			return
 		}
-		if len(parts) >= 3 && parts[0] == "server" {
-			isServer = true
-			data.Role = types.StringValue(parts[1])
-			data.Principal = types.StringValue(parts[2])
-		} else if len(parts) >= 4 && parts[0] == "db" {
-			isServer = false
-			data.Database = types.StringValue(parts[1])
-			data.Role = types.StringValue(parts[2])
-			data.Principal = types.StringValue(parts[3])
+		isServer = parsed.IsServer
+		data.Role = types.StringValue(parsed.Role)
+		data.Principal = types.StringValue(parsed.Principal)
+		if parsed.Database != "" {
+			data.Database = types.StringValue(parsed.Database)
+		} else {
+			data.Database = types.StringNull()
 		}
 	}
 
@@ -291,35 +283,80 @@ func (r *MssqlRoleAssignmentResource) Delete(ctx context.Context, req resource.D
 }
 
 func (r *MssqlRoleAssignmentResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	// Import formats:
+	// Import ID must be:
 	// - <server_id>/db/<database>/<role>/<principal>
 	// - <server_id>/server/<role>/<principal>
-	parts := strings.Split(req.ID, "/")
-	if len(parts) >= 4 && parts[0] == r.ctx.ServerID {
-		parts = parts[1:]
+	parsed, err := parseRoleAssignmentId(req.ID)
+	if err != nil {
+		resp.Diagnostics.AddError("Invalid import ID", err.Error())
+		return
 	}
 
-	switch {
-	case len(parts) == 4 && parts[0] == "db":
-		database := parts[1]
-		role := parts[2]
-		principal := parts[3]
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("database"), database)...)
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("role"), role)...)
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("principal"), principal)...)
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("server_role"), false)...)
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), fmt.Sprintf("%s/db/%s/%s/%s", r.ctx.ServerID, database, role, principal))...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("role"), parsed.Role)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("principal"), parsed.Principal)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("server_role"), parsed.IsServer)...)
+	if parsed.Database != "" {
+		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("database"), parsed.Database)...)
+	}
+
+	if parsed.IsServer {
+		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), fmt.Sprintf("%s/server/%s/%s", r.ctx.ServerID, parsed.Role, parsed.Principal))...)
 		return
-	case len(parts) == 3 && parts[0] == "server":
-		role := parts[1]
-		principal := parts[2]
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("role"), role)...)
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("principal"), principal)...)
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("server_role"), true)...)
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), fmt.Sprintf("%s/server/%s/%s", r.ctx.ServerID, role, principal))...)
-		return
+	}
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), fmt.Sprintf("%s/db/%s/%s/%s", r.ctx.ServerID, parsed.Database, parsed.Role, parsed.Principal))...)
+}
+
+type roleAssignmentId struct {
+	IsServer  bool
+	Database  string
+	Role      string
+	Principal string
+}
+
+func parseRoleAssignmentId(id string) (roleAssignmentId, error) {
+	parts := strings.Split(id, "/")
+	if len(parts) < 4 || parts[0] == "" {
+		return roleAssignmentId{}, fmt.Errorf("expected id in format <server_id>/db/<database>/<role>/<principal> or <server_id>/server/<role>/<principal>, got %q", id)
+	}
+	scope := parts[1]
+	switch scope {
+	case "server":
+		if len(parts) != 4 {
+			return roleAssignmentId{}, fmt.Errorf("expected id in format <server_id>/server/<role>/<principal>, got %q", id)
+		}
+		role, err := url.QueryUnescape(parts[2])
+		if err != nil {
+			return roleAssignmentId{}, err
+		}
+		principal, err := url.QueryUnescape(parts[3])
+		if err != nil {
+			return roleAssignmentId{}, err
+		}
+		if role == "" || principal == "" {
+			return roleAssignmentId{}, fmt.Errorf("expected id in format <server_id>/server/<role>/<principal>, got %q", id)
+		}
+		return roleAssignmentId{IsServer: true, Role: role, Principal: principal}, nil
+	case "db":
+		if len(parts) != 5 {
+			return roleAssignmentId{}, fmt.Errorf("expected id in format <server_id>/db/<database>/<role>/<principal>, got %q", id)
+		}
+		db, err := url.QueryUnescape(parts[2])
+		if err != nil {
+			return roleAssignmentId{}, err
+		}
+		role, err := url.QueryUnescape(parts[3])
+		if err != nil {
+			return roleAssignmentId{}, err
+		}
+		principal, err := url.QueryUnescape(parts[4])
+		if err != nil {
+			return roleAssignmentId{}, err
+		}
+		if db == "" || role == "" || principal == "" {
+			return roleAssignmentId{}, fmt.Errorf("expected id in format <server_id>/db/<database>/<role>/<principal>, got %q", id)
+		}
+		return roleAssignmentId{IsServer: false, Database: db, Role: role, Principal: principal}, nil
 	default:
-		resp.Diagnostics.AddError("Invalid import ID", "expected <server_id>/db/<database>/<role>/<principal> or <server_id>/server/<role>/<principal>")
-		return
+		return roleAssignmentId{}, fmt.Errorf("expected id in format <server_id>/db/<database>/<role>/<principal> or <server_id>/server/<role>/<principal>, got %q", id)
 	}
 }

@@ -27,4 +27,4 @@ Assigns a principal to a database role or server role.
 
 ### Read-Only
 
-- `id` (String) The ID of this resource.
+- `id` (String) Resource identifier in format `<server_id>/db/<database>/<role>/<principal>` or `<server_id>/server/<role>/<principal>` where `server_id` is `host:port`.

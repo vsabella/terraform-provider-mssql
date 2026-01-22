@@ -59,23 +59,13 @@ func grantToId(serverID string, grant mssql.GrantPermission) string {
 
 func decodeGrantId(id string) (string, mssql.GrantPermission, error) {
 	parts := strings.Split(id, "/")
-	if len(parts) < 3 {
+	if len(parts) < 4 {
 		return "", mssql.GrantPermission{}, fmt.Errorf("expected id in format <server_id>/<database>/<principal>/<permission>[/object_type/object_name], got %q", id)
 	}
 
-	var serverID string
-	var offset int
 	switch len(parts) {
-	case 3:
-		offset = 0
-	case 4:
-		serverID = parts[0]
-		offset = 1
-	case 5:
-		offset = 0
-	case 6:
-		serverID = parts[0]
-		offset = 1
+	case 4, 6:
+		// ok
 	default:
 		return "", mssql.GrantPermission{}, fmt.Errorf("expected id in format <server_id>/<database>/<principal>/<permission>[/object_type/object_name], got %q", id)
 	}
@@ -84,15 +74,23 @@ func decodeGrantId(id string) (string, mssql.GrantPermission, error) {
 		return url.QueryUnescape(s)
 	}
 
-	db, err := decode(parts[offset])
+	serverID, err := decode(parts[0])
 	if err != nil {
 		return "", mssql.GrantPermission{}, err
 	}
-	principal, err := decode(parts[offset+1])
+	if serverID == "" {
+		return "", mssql.GrantPermission{}, fmt.Errorf("expected id in format <server_id>/<database>/<principal>/<permission>[/object_type/object_name], got %q", id)
+	}
+
+	db, err := decode(parts[1])
 	if err != nil {
 		return "", mssql.GrantPermission{}, err
 	}
-	permission, err := decode(parts[offset+2])
+	principal, err := decode(parts[2])
+	if err != nil {
+		return "", mssql.GrantPermission{}, err
+	}
+	permission, err := decode(parts[3])
 	if err != nil {
 		return "", mssql.GrantPermission{}, err
 	}
@@ -103,12 +101,12 @@ func decodeGrantId(id string) (string, mssql.GrantPermission, error) {
 		Permission: permission,
 	}
 
-	if len(parts) == 5 || len(parts) == 6 {
-		objectType, err := decode(parts[offset+3])
+	if len(parts) == 6 {
+		objectType, err := decode(parts[4])
 		if err != nil {
 			return "", mssql.GrantPermission{}, err
 		}
-		objectName, err := decode(parts[offset+4])
+		objectName, err := decode(parts[5])
 		if err != nil {
 			return "", mssql.GrantPermission{}, err
 		}
@@ -268,22 +266,23 @@ func (r *MssqlGrantResource) Read(ctx context.Context, req resource.ReadRequest,
 
 	database := data.Database.ValueString()
 	if data.Database.IsUnknown() || data.Database.IsNull() || database == "" {
-		if _, decoded, err := decodeGrantId(data.Id.ValueString()); err == nil {
-			database = decoded.Database
-			if decoded.Principal != "" {
-				data.Principal = types.StringValue(decoded.Principal)
-			}
-			if decoded.Permission != "" {
-				data.Permission = types.StringValue(strings.ToUpper(decoded.Permission))
-			}
-			if decoded.ObjectType != "" {
-				data.ObjectType = types.StringValue(decoded.ObjectType)
-			}
-			if decoded.ObjectName != "" {
-				data.ObjectName = types.StringValue(decoded.ObjectName)
-			}
-		} else {
-			database = r.ctx.Database
+		_, decoded, err := decodeGrantId(data.Id.ValueString())
+		if err != nil {
+			resp.Diagnostics.AddError("Invalid grant ID", err.Error())
+			return
+		}
+		database = decoded.Database
+		if decoded.Principal != "" {
+			data.Principal = types.StringValue(decoded.Principal)
+		}
+		if decoded.Permission != "" {
+			data.Permission = types.StringValue(strings.ToUpper(decoded.Permission))
+		}
+		if decoded.ObjectType != "" {
+			data.ObjectType = types.StringValue(decoded.ObjectType)
+		}
+		if decoded.ObjectName != "" {
+			data.ObjectName = types.StringValue(decoded.ObjectName)
 		}
 	}
 
@@ -348,22 +347,23 @@ func (r *MssqlGrantResource) Delete(ctx context.Context, req resource.DeleteRequ
 
 	database := data.Database.ValueString()
 	if data.Database.IsUnknown() || data.Database.IsNull() || database == "" {
-		if _, decoded, err := decodeGrantId(data.Id.ValueString()); err == nil {
-			database = decoded.Database
-			if data.Principal.IsNull() && decoded.Principal != "" {
-				data.Principal = types.StringValue(decoded.Principal)
-			}
-			if data.Permission.IsNull() && decoded.Permission != "" {
-				data.Permission = types.StringValue(strings.ToUpper(decoded.Permission))
-			}
-			if data.ObjectType.IsNull() && decoded.ObjectType != "" {
-				data.ObjectType = types.StringValue(decoded.ObjectType)
-			}
-			if data.ObjectName.IsNull() && decoded.ObjectName != "" {
-				data.ObjectName = types.StringValue(decoded.ObjectName)
-			}
-		} else {
-			database = r.ctx.Database
+		_, decoded, err := decodeGrantId(data.Id.ValueString())
+		if err != nil {
+			resp.Diagnostics.AddError("Invalid grant ID", err.Error())
+			return
+		}
+		database = decoded.Database
+		if data.Principal.IsNull() && decoded.Principal != "" {
+			data.Principal = types.StringValue(decoded.Principal)
+		}
+		if data.Permission.IsNull() && decoded.Permission != "" {
+			data.Permission = types.StringValue(strings.ToUpper(decoded.Permission))
+		}
+		if data.ObjectType.IsNull() && decoded.ObjectType != "" {
+			data.ObjectType = types.StringValue(decoded.ObjectType)
+		}
+		if data.ObjectName.IsNull() && decoded.ObjectName != "" {
+			data.ObjectName = types.StringValue(decoded.ObjectName)
 		}
 	}
 
@@ -382,7 +382,7 @@ func (r *MssqlGrantResource) Delete(ctx context.Context, req resource.DeleteRequ
 }
 
 func (r *MssqlGrantResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	serverID, grant, err := decodeGrantId(req.ID)
+	_, grant, err := decodeGrantId(req.ID)
 	if err != nil {
 		resp.Diagnostics.AddError("Invalid import ID", err.Error())
 		return
@@ -390,9 +390,6 @@ func (r *MssqlGrantResource) ImportState(ctx context.Context, req resource.Impor
 	if grant.Database == "" || grant.Principal == "" || grant.Permission == "" {
 		resp.Diagnostics.AddError("Invalid import ID", "database, principal, and permission must not be empty")
 		return
-	}
-	if serverID == "" {
-		serverID = r.ctx.ServerID
 	}
 
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("database"), grant.Database)...)
@@ -404,5 +401,5 @@ func (r *MssqlGrantResource) ImportState(ctx context.Context, req resource.Impor
 	if grant.ObjectName != "" {
 		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("object_name"), grant.ObjectName)...)
 	}
-	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), grantToId(serverID, grant))...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), grantToId(r.ctx.ServerID, grant))...)
 }

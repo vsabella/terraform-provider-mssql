@@ -28,7 +28,7 @@ Manages a SQL Server database including engine options and scoped configurations
 - `auto_shrink` (Boolean) Automatically shrink the database files. Not recommended for production. If not specified, the existing database setting is preserved.
 - `auto_update_stats` (Boolean) Automatically update statistics. If not specified, the existing database setting is preserved.
 - `auto_update_stats_async` (Boolean) Update statistics asynchronously. If not specified, the existing database setting is preserved.
-- `collation` (String) Database collation. If not specified, uses the server default collation.
+- `collation` (String) Database collation. If not specified, uses the server default collation. Changing this updates the database default for new objects only; existing columns keep their current collations and a change may require downtime.
 - `compatibility_level` (Number) Database compatibility level (e.g., 150 for SQL Server 2019, 160 for SQL Server 2022). If not specified, the existing setting is preserved.
 - `read_committed_snapshot` (Boolean) Enable READ_COMMITTED_SNAPSHOT isolation. If not specified, the existing database setting is preserved.
 - `recovery_model` (String) Recovery model: FULL, BULK_LOGGED, or SIMPLE. If not specified, the existing setting is preserved.

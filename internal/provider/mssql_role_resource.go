@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strings"
 
 	"database/sql"
@@ -49,7 +50,8 @@ func (r *MssqlRoleResource) Schema(ctx context.Context, req resource.SchemaReque
 
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
-				Computed: true,
+				MarkdownDescription: "Resource identifier in format `<server_id>/<database>/<role>` where `server_id` is `host:port`.",
+				Computed:            true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
@@ -143,26 +145,14 @@ func (r *MssqlRoleResource) Read(ctx context.Context, req resource.ReadRequest, 
 	}
 
 	database := data.Database.ValueString()
-	if data.Database.IsUnknown() || data.Database.IsNull() || database == "" {
-		if id := data.Id.ValueString(); id != "" {
-			parts := strings.Split(id, "/")
-			switch len(parts) {
-			case 2:
-				if parts[0] == r.ctx.ServerID {
-					database = r.ctx.Database
-					data.Name = types.StringValue(parts[1])
-				} else {
-					database = parts[0]
-					data.Name = types.StringValue(parts[1])
-				}
-			case 3:
-				database = parts[1]
-				data.Name = types.StringValue(parts[2])
-			}
+	if data.Database.IsUnknown() || data.Database.IsNull() || database == "" || data.Name.IsNull() || data.Name.ValueString() == "" {
+		dbName, roleName, err := parseRoleId(data.Id.ValueString())
+		if err != nil {
+			resp.Diagnostics.AddError("Invalid role ID", err.Error())
+			return
 		}
-		if database == "" {
-			database = r.ctx.Database
-		}
+		database = dbName
+		data.Name = types.StringValue(roleName)
 	}
 
 	role, err := r.ctx.Client.GetRole(ctx, database, data.Name.ValueString())
@@ -192,26 +182,14 @@ func (r *MssqlRoleResource) Delete(ctx context.Context, req resource.DeleteReque
 	}
 
 	database := data.Database.ValueString()
-	if data.Database.IsUnknown() || data.Database.IsNull() || database == "" {
-		if id := data.Id.ValueString(); id != "" {
-			parts := strings.Split(id, "/")
-			switch len(parts) {
-			case 2:
-				if parts[0] == r.ctx.ServerID {
-					database = r.ctx.Database
-					data.Name = types.StringValue(parts[1])
-				} else {
-					database = parts[0]
-					data.Name = types.StringValue(parts[1])
-				}
-			case 3:
-				database = parts[1]
-				data.Name = types.StringValue(parts[2])
-			}
+	if data.Database.IsUnknown() || data.Database.IsNull() || database == "" || data.Name.IsNull() || data.Name.ValueString() == "" {
+		dbName, roleName, err := parseRoleId(data.Id.ValueString())
+		if err != nil {
+			resp.Diagnostics.AddError("Invalid role ID", err.Error())
+			return
 		}
-		if database == "" {
-			database = r.ctx.Database
-		}
+		database = dbName
+		data.Name = types.StringValue(roleName)
 	}
 
 	err := r.ctx.Client.DeleteRole(ctx, database, data.Name.ValueString())
@@ -222,40 +200,30 @@ func (r *MssqlRoleResource) Delete(ctx context.Context, req resource.DeleteReque
 }
 
 func (r *MssqlRoleResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	// Import formats:
-	// - <role> (uses provider database)
-	// - <database>/<role>
-	// - <server_id>/<role>
-	// - <server_id>/<database>/<role>
-	parts := strings.Split(req.ID, "/")
-	var database, name string
-
-	switch len(parts) {
-	case 1:
-		database = r.ctx.Database
-		name = parts[0]
-	case 2:
-		if parts[0] == r.ctx.ServerID {
-			database = r.ctx.Database
-			name = parts[1]
-		} else {
-			database = parts[0]
-			name = parts[1]
-		}
-	case 3:
-		database = parts[1]
-		name = parts[2]
-	default:
-		resp.Diagnostics.AddError("Invalid import ID", "expected <role>, <database>/<role>, <server_id>/<role>, or <server_id>/<database>/<role>")
-		return
-	}
-
-	if database == "" || name == "" {
-		resp.Diagnostics.AddError("Invalid import ID", "database and role name must not be empty")
+	// Import ID must be <server_id>/<database>/<role>
+	database, name, err := parseRoleId(req.ID)
+	if err != nil {
+		resp.Diagnostics.AddError("Invalid import ID", err.Error())
 		return
 	}
 
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("database"), database)...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("name"), name)...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), fmt.Sprintf("%s/%s/%s", r.ctx.ServerID, database, name))...)
+}
+
+func parseRoleId(id string) (string, string, error) {
+	parts := strings.Split(id, "/")
+	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+		return "", "", fmt.Errorf("expected id in format <server_id>/<database>/<role>, got %q", id)
+	}
+	db, err := url.QueryUnescape(parts[1])
+	if err != nil {
+		return "", "", err
+	}
+	name, err := url.QueryUnescape(parts[2])
+	if err != nil {
+		return "", "", err
+	}
+	return db, name, nil
 }

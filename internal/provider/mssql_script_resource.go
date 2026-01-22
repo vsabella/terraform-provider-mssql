@@ -3,6 +3,8 @@ package provider
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -211,5 +213,30 @@ func (r *MssqlScriptResource) Delete(ctx context.Context, req resource.DeleteReq
 }
 
 func (r *MssqlScriptResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+	// Import ID must be <server_id>/<database>/<name>
+	database, name, err := parseScriptId(req.ID)
+	if err != nil {
+		resp.Diagnostics.AddError("Invalid import ID", err.Error())
+		return
+	}
+
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("database_name"), database)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("name"), name)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), fmt.Sprintf("%s/%s/%s", r.ctx.ServerID, database, name))...)
+}
+
+func parseScriptId(id string) (string, string, error) {
+	parts := strings.Split(id, "/")
+	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+		return "", "", fmt.Errorf("expected id in format <server_id>/<database>/<name>, got %q", id)
+	}
+	db, err := url.QueryUnescape(parts[1])
+	if err != nil {
+		return "", "", err
+	}
+	name, err := url.QueryUnescape(parts[2])
+	if err != nil {
+		return "", "", err
+	}
+	return db, name, nil
 }
