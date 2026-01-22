@@ -11,6 +11,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
@@ -38,6 +39,8 @@ type MssqlLoginResourceModel struct {
 	Password        types.String `tfsdk:"password"`
 	DefaultDatabase types.String `tfsdk:"default_database"`
 	DefaultLanguage types.String `tfsdk:"default_language"`
+	Sid             types.String `tfsdk:"sid"`
+	AutoImport      types.Bool   `tfsdk:"auto_import"`
 }
 
 func (r *MssqlLoginResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -46,7 +49,7 @@ func (r *MssqlLoginResource) Metadata(ctx context.Context, req resource.Metadata
 
 func (r *MssqlLoginResource) Schema(ctx context.Context, req resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Manages a SQL Server login (server-level principal). Use this resource to create SQL authentication logins that can then be mapped to database users.",
+		MarkdownDescription: "Manages a SQL Server login (server-level principal). Use this resource to create or adopt SQL authentication logins that can then be mapped to database users.",
 
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
@@ -79,6 +82,21 @@ func (r *MssqlLoginResource) Schema(ctx context.Context, req resource.SchemaRequ
 				MarkdownDescription: "Default language for the login. If not specified, uses the server default.",
 				Optional:            true,
 				Computed:            true,
+			},
+			"sid": schema.StringAttribute{
+				MarkdownDescription: "Login SID as a hex string (for example `0x010500000000000515000000...`). Changing this forces a new resource to be created.",
+				Optional:            true,
+				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"auto_import": schema.BoolAttribute{
+				MarkdownDescription: "When true, if the login already exists, adopt it into state instead of failing create. Existing logins are not modified during adoption.",
+				Optional:            true,
+				Computed:            true,
+				Default:             booldefault.StaticBool(false),
 			},
 		},
 	}
@@ -114,6 +132,32 @@ func (r *MssqlLoginResource) Create(ctx context.Context, req resource.CreateRequ
 		Password:        data.Password.ValueString(),
 		DefaultDatabase: data.DefaultDatabase.ValueString(),
 		DefaultLanguage: data.DefaultLanguage.ValueString(),
+		Sid:             data.Sid.ValueString(),
+	}
+
+	// Auto-import (adopt) existing login instead of failing create.
+	if data.AutoImport.ValueBool() {
+		login, err := r.ctx.Client.GetLogin(ctx, create.Name)
+		if err == nil {
+			if !data.Sid.IsNull() && !data.Sid.IsUnknown() && data.Sid.ValueString() != "" &&
+				login.Sid != "" && !strings.EqualFold(data.Sid.ValueString(), login.Sid) {
+				resp.Diagnostics.AddError(
+					"Existing login SID mismatch",
+					fmt.Sprintf("Login %s already exists with SID %s, which does not match the configured SID %s.",
+						create.Name, login.Sid, data.Sid.ValueString()),
+				)
+				return
+			}
+
+			loginToResourceWithServer(&data, login, r.ctx.ServerID)
+			tflog.Debug(ctx, fmt.Sprintf("Adopted existing login %s", data.Name.ValueString()))
+			resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
+			return
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			resp.Diagnostics.AddError(fmt.Sprintf("Error checking login %s", create.Name), err.Error())
+			return
+		}
 	}
 
 	login, err := r.ctx.Client.CreateLogin(ctx, create)
@@ -134,6 +178,11 @@ func loginToResourceWithServer(data *MssqlLoginResourceModel, login mssql.Login,
 	data.DefaultDatabase = types.StringValue(login.DefaultDatabase)
 	if login.DefaultLanguage != "" {
 		data.DefaultLanguage = types.StringValue(login.DefaultLanguage)
+	}
+	if login.Sid != "" {
+		data.Sid = types.StringValue(login.Sid)
+	} else {
+		data.Sid = types.StringNull()
 	}
 }
 
@@ -244,6 +293,10 @@ func (r *MssqlLoginResource) ImportState(ctx context.Context, req resource.Impor
 	if login.DefaultLanguage != "" {
 		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("default_language"), login.DefaultLanguage)...)
 	}
+	if login.Sid != "" {
+		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("sid"), login.Sid)...)
+	}
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("auto_import"), false)...)
 
 	// Password cannot be imported - user will need to set it
 	resp.Diagnostics.AddWarning(

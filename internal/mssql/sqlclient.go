@@ -834,6 +834,7 @@ func normalizePrincipalName(principal string) (string, error) {
 // Allow letters, digits, underscore, dot, at, hash, dash, backslash, and space.
 var identifierRe = regexp.MustCompile(`^[A-Za-z0-9_.@#\\ -]+$`)
 var permissionRe = regexp.MustCompile(`^[A-Za-z0-9_ ]+$`)
+var loginSidRe = regexp.MustCompile(`^0x[0-9A-Fa-f]+$`)
 
 func validateIdentifier(field, value string) error {
 	if strings.TrimSpace(value) == "" {
@@ -857,6 +858,21 @@ func validatePermission(field, value string) error {
 	}
 	if !permissionRe.MatchString(value) {
 		return fmt.Errorf("%s contains invalid characters", field)
+	}
+	return nil
+}
+
+func validateLoginSid(sid string) error {
+	trimmed := strings.TrimSpace(sid)
+	if trimmed == "" {
+		return nil
+	}
+	if !loginSidRe.MatchString(trimmed) {
+		return fmt.Errorf("login sid must be a hex string like 0x010500000000000515000000...")
+	}
+	hex := strings.TrimPrefix(strings.ToLower(trimmed), "0x")
+	if len(hex)%2 != 0 {
+		return fmt.Errorf("login sid must contain an even number of hex characters")
 	}
 	return nil
 }
@@ -1034,7 +1050,8 @@ func (m *client) GetLogin(ctx context.Context, name string) (Login, error) {
 		p.[name] AS name,
 		COALESCE(l.[default_database_name], 'master') AS default_database,
 		COALESCE(l.[default_language_name], '') AS default_language,
-		p.[is_disabled] AS is_disabled
+		p.[is_disabled] AS is_disabled,
+		COALESCE(CONVERT(varchar(256), p.[sid], 1), '') AS sid
 	FROM sys.server_principals p
 	LEFT JOIN sys.sql_logins l ON p.principal_id = l.principal_id
 	WHERE p.[name] = @name AND p.[type] IN ('S', 'U', 'G')`
@@ -1042,7 +1059,7 @@ func (m *client) GetLogin(ctx context.Context, name string) (Login, error) {
 	tflog.Debug(ctx, fmt.Sprintf("Executing query for login %s: %s", name, cmd))
 	result := m.conn.QueryRowContext(ctx, cmd, sql.Named("name", name))
 
-	err := result.Scan(&login.Name, &login.DefaultDatabase, &login.DefaultLanguage, &login.IsDisabled)
+	err := result.Scan(&login.Name, &login.DefaultDatabase, &login.DefaultLanguage, &login.IsDisabled, &login.Sid)
 	return login, err
 }
 
@@ -1054,6 +1071,9 @@ func (m *client) CreateLogin(ctx context.Context, create CreateLogin) (Login, er
 	}
 	if create.Password == "" {
 		return login, fmt.Errorf("invalid login password: must not be empty")
+	}
+	if err := validateLoginSid(create.Sid); err != nil {
+		return login, err
 	}
 	if create.DefaultDatabase != "" {
 		if err := validateIdentifier("default database", create.DefaultDatabase); err != nil {
@@ -1082,6 +1102,10 @@ func (m *client) CreateLogin(ctx context.Context, create CreateLogin) (Login, er
 	if create.DefaultLanguage != "" {
 		cmdBuilder.WriteString(" + ', DEFAULT_LANGUAGE = ' + QUOTENAME(@default_language)")
 		args = append(args, sql.Named("default_language", create.DefaultLanguage))
+	}
+	if create.Sid != "" {
+		cmdBuilder.WriteString(" + ', SID = ' + @sid")
+		args = append(args, sql.Named("sid", create.Sid))
 	}
 
 	cmdBuilder.WriteString(";\n")

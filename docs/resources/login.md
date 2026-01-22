@@ -3,12 +3,12 @@
 page_title: "mssql_login Resource - mssql"
 subcategory: ""
 description: |-
-  Manages a SQL Server login (server-level principal). Use this resource to create SQL authentication logins that can then be mapped to database users.
+  Manages a SQL Server login (server-level principal). Use this resource to create or adopt SQL authentication logins that can then be mapped to database users.
 ---
 
 # mssql_login (Resource)
 
-Manages a SQL Server login (server-level principal). Use this resource to create SQL authentication logins that can then be mapped to database users.
+Manages a SQL Server login (server-level principal). Use this resource to create or adopt SQL authentication logins that can then be mapped to database users.
 
 
 
@@ -24,8 +24,10 @@ Manages a SQL Server login (server-level principal). Use this resource to create
 
 ### Optional
 
+- `auto_import` (Boolean) When true, if the login already exists, adopt it into state instead of failing create. Existing logins are not modified during adoption.
 - `default_database` (String) Default database for the login. Defaults to `master`.
 - `default_language` (String) Default language for the login. If not specified, uses the server default.
+- `sid` (String) Login SID as a hex string (for example `0x010500000000000515000000...`). Changing this forces a new resource to be created.
 
 ### Read-Only
 
