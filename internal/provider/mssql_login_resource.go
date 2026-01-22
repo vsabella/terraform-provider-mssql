@@ -49,7 +49,7 @@ func (r *MssqlLoginResource) Metadata(ctx context.Context, req resource.Metadata
 
 func (r *MssqlLoginResource) Schema(ctx context.Context, req resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Manages a SQL Server login (server-level principal). Use this resource to create SQL authentication logins that can then be mapped to database users.",
+		MarkdownDescription: "Manages a SQL Server login (server-level principal). Use this resource to create or adopt SQL authentication logins that can then be mapped to database users.",
 
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
@@ -84,7 +84,7 @@ func (r *MssqlLoginResource) Schema(ctx context.Context, req resource.SchemaRequ
 				Computed:            true,
 			},
 			"sid": schema.StringAttribute{
-				MarkdownDescription: "SID for the login, as a hex string (e.g., `0x010500000000000515000000...`). Changing this forces a new resource to be created.",
+				MarkdownDescription: "Login SID as a hex string (for example `0x010500000000000515000000...`). Changing this forces a new resource to be created.",
 				Optional:            true,
 				Computed:            true,
 				PlanModifiers: []planmodifier.String{
@@ -93,7 +93,7 @@ func (r *MssqlLoginResource) Schema(ctx context.Context, req resource.SchemaRequ
 				},
 			},
 			"auto_import": schema.BoolAttribute{
-				MarkdownDescription: "If true, and the login already exists, adopt it into state instead of failing create. Existing logins are not modified during adoption.",
+				MarkdownDescription: "When true, if the login already exists, adopt it into state instead of failing create. Existing logins are not modified during adoption.",
 				Optional:            true,
 				Computed:            true,
 				Default:             booldefault.StaticBool(false),
@@ -135,6 +135,7 @@ func (r *MssqlLoginResource) Create(ctx context.Context, req resource.CreateRequ
 		Sid:             data.Sid.ValueString(),
 	}
 
+	// Auto-import (adopt) existing login instead of failing create.
 	if data.AutoImport.ValueBool() {
 		login, err := r.ctx.Client.GetLogin(ctx, create.Name)
 		if err == nil {
