@@ -50,6 +50,19 @@ func Test_buildCreateUser(t *testing.T) {
 			want1: []any{sql.Named("username", "user"), sql.Named("default_schema", "dbo"), sql.Named("password", "password"), sql.Named("sid", "SOMESID")},
 		},
 		{
+			name: "User with Login",
+			args: args{CreateUser{
+				Username:      "app_user",
+				LoginName:     "app_login",
+				Password:      "",
+				Sid:           "",
+				External:      false,
+				DefaultSchema: "dbo",
+			}},
+			want:  `DECLARE @sql NVARCHAR(max);SET @sql = 'CREATE USER ' + QUOTENAME(@username) + ' FOR LOGIN ' + QUOTENAME(@login_name) + 'WITH ' + 'DEFAULT_SCHEMA = ' + QUOTENAME(@default_schema);EXEC (@sql);`,
+			want1: []any{sql.Named("username", "app_user"), sql.Named("login_name", "app_login"), sql.Named("default_schema", "dbo")},
+		},
+		{
 			name: "External User",
 			args: args{CreateUser{
 				Username:      "bob@contoso.com",

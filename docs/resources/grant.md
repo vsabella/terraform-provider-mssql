@@ -3,12 +3,55 @@
 page_title: "mssql_grant Resource - mssql"
 subcategory: ""
 description: |-
-  DB grant resource
+  Grants permissions to a database principal.
+  Supports both database-level permissions (e.g., CREATE PROCEDURE) and object-level permissions (e.g., CONTROL on a SCHEMA).
+  Examples:
+  Database-level grant:
+  hcl
+  resource "mssql_grant" "create_proc" {
+    database   = "mydb"
+    permission = "CREATE PROCEDURE"
+    principal  = "app_user"
+  }
+  
+  Schema-level grant:
+  hcl
+  resource "mssql_grant" "schema_control" {
+    database    = "mydb"
+    permission  = "CONTROL"
+    principal   = "tools_user"
+    object_type = "SCHEMA"
+    object_name = "tools"
+  }
 ---
 
 # mssql_grant (Resource)
 
-DB grant resource
+Grants permissions to a database principal.
+
+Supports both database-level permissions (e.g., CREATE PROCEDURE) and object-level permissions (e.g., CONTROL on a SCHEMA).
+
+**Examples:**
+
+Database-level grant:
+```hcl
+resource "mssql_grant" "create_proc" {
+  database   = "mydb"
+  permission = "CREATE PROCEDURE"
+  principal  = "app_user"
+}
+```
+
+Schema-level grant:
+```hcl
+resource "mssql_grant" "schema_control" {
+  database    = "mydb"
+  permission  = "CONTROL"
+  principal   = "tools_user"
+  object_type = "SCHEMA"
+  object_name = "tools"
+}
+```
 
 
 

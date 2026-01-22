@@ -7,6 +7,15 @@ description: |-
   Use this resource to install tools, run bootstrap scripts, or execute any SQL that needs to be managed as infrastructure.
   The script is executed on create and when the version changes. Terraform tracks the version in state to determine when to re-run the script.
   delete_script is only executed when the resource is destroyed (not when version changes).
+  Example usage:
+  hcl
+  resource "mssql_script" "first_responder_kit" {
+    database_name = "master"
+    name          = "first_responder_kit"
+    create_script = file("${path.module}/install-blitz.sql")
+    delete_script = "DROP PROC sp_Blitz"
+    version       = md5(file("${path.module}/install-blitz.sql"))
+  }
 ---
 
 # mssql_script (Resource)
@@ -18,6 +27,17 @@ Use this resource to install tools, run bootstrap scripts, or execute any SQL th
 The script is executed on create and when the version changes. Terraform tracks the version in state to determine when to re-run the script.
 
 delete_script is only executed when the resource is destroyed (not when version changes).
+
+**Example usage:**
+```hcl
+resource "mssql_script" "first_responder_kit" {
+  database_name = "master"
+  name          = "first_responder_kit"
+  create_script = file("${path.module}/install-blitz.sql")
+  delete_script = "DROP PROC sp_Blitz"
+  version       = md5(file("${path.module}/install-blitz.sql"))
+}
+```
 
 
 

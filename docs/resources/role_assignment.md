@@ -4,11 +4,44 @@ page_title: "mssql_role_assignment Resource - mssql"
 subcategory: ""
 description: |-
   Assigns a principal to a database role or server role.
+  Database role example:
+  hcl
+  resource "mssql_role_assignment" "db_reader" {
+    database  = mssql_database.app.name
+    role      = "db_datareader"
+    principal = mssql_user.app.username
+  }
+  
+  Server role example (for telemetry):
+  hcl
+  resource "mssql_role_assignment" "telemetry_state_reader" {
+    server_role = true
+    role        = "##MS_ServerStateReader##"
+    principal   = mssql_login.telemetry.name
+  }
 ---
 
 # mssql_role_assignment (Resource)
 
 Assigns a principal to a database role or server role.
+
+**Database role example:**
+```hcl
+resource "mssql_role_assignment" "db_reader" {
+  database  = mssql_database.app.name
+  role      = "db_datareader"
+  principal = mssql_user.app.username
+}
+```
+
+**Server role example (for telemetry):**
+```hcl
+resource "mssql_role_assignment" "telemetry_state_reader" {
+  server_role = true
+  role        = "##MS_ServerStateReader##"
+  principal   = mssql_login.telemetry.name
+}
+```
 
 
 

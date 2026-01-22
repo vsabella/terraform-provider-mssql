@@ -48,7 +48,25 @@ func (r *MssqlRoleAssignmentResource) Metadata(ctx context.Context, req resource
 func (r *MssqlRoleAssignmentResource) Schema(ctx context.Context, req resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		// This description is used by the documentation generator and the language server.
-		MarkdownDescription: "Assigns a principal to a database role or server role.",
+		MarkdownDescription: `Assigns a principal to a database role or server role.
+
+**Database role example:**
+` + "```hcl" + `
+resource "mssql_role_assignment" "db_reader" {
+  database  = mssql_database.app.name
+  role      = "db_datareader"
+  principal = mssql_user.app.username
+}
+` + "```" + `
+
+**Server role example (for telemetry):**
+` + "```hcl" + `
+resource "mssql_role_assignment" "telemetry_state_reader" {
+  server_role = true
+  role        = "##MS_ServerStateReader##"
+  principal   = mssql_login.telemetry.name
+}
+` + "```",
 
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
