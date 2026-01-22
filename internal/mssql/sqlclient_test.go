@@ -268,3 +268,72 @@ func Test_validatePermission(t *testing.T) {
 		})
 	}
 }
+
+func Test_validateLoginSid(t *testing.T) {
+	tests := []struct {
+		name    string
+		sid     string
+		wantErr bool
+	}{
+		{name: "empty ok", sid: "", wantErr: false},
+		{name: "valid sid", sid: "0x010500000000000515000000", wantErr: false},
+		{name: "missing 0x prefix", sid: "0105000000", wantErr: true},
+		{name: "odd length", sid: "0x123", wantErr: true},
+		{name: "invalid chars", sid: "0x12ZZ", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateLoginSid(tt.sid)
+			if tt.wantErr && err == nil {
+				t.Fatalf("expected error for sid %q", tt.sid)
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("unexpected error for sid %q: %v", tt.sid, err)
+			}
+		})
+	}
+}
+
+func Test_CreateLogin_WithSid(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to open sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	c := &client{conn: db}
+	create := CreateLogin{
+		Name:            "test_login",
+		Password:        "Password123!",
+		DefaultDatabase: "master",
+		Sid:             "0x010500000000000515000000",
+	}
+
+	mock.ExpectExec("CREATE LOGIN").
+		WithArgs(
+			sql.Named("name", create.Name),
+			sql.Named("password", create.Password),
+			sql.Named("default_database", create.DefaultDatabase),
+			sql.Named("sid", create.Sid),
+		).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	rows := sqlmock.NewRows([]string{"name", "default_database", "default_language", "is_disabled", "sid"}).
+		AddRow(create.Name, "master", "", false, create.Sid)
+	mock.ExpectQuery("FROM sys.server_principals").
+		WithArgs(sql.Named("name", create.Name)).
+		WillReturnRows(rows)
+
+	login, err := c.CreateLogin(context.Background(), create)
+	if err != nil {
+		t.Fatalf("CreateLogin() error = %v", err)
+	}
+	if login.Sid != create.Sid {
+		t.Fatalf("CreateLogin() sid = %s, want %s", login.Sid, create.Sid)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sqlmock expectations: %v", err)
+	}
+}

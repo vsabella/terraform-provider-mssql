@@ -140,6 +140,7 @@ type Login struct {
 	DefaultDatabase string
 	DefaultLanguage string
 	IsDisabled      bool
+	Sid             string
 }
 
 // CreateLogin contains parameters for creating a new login.
@@ -148,6 +149,7 @@ type CreateLogin struct {
 	Password        string
 	DefaultDatabase string
 	DefaultLanguage string
+	Sid             string
 }
 
 // UpdateLogin contains parameters for updating an existing login.
