@@ -62,6 +62,23 @@ func TestAccMssqlLoginResource_WithUser(t *testing.T) {
 	})
 }
 
+func TestAccMssqlLoginResource_AutoImport(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: providerConfig + testAccMssqlLoginResourceAutoImportConfig(),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("mssql_login.auto", "name", "auto_import_login"),
+					resource.TestCheckResourceAttr("mssql_login.auto", "auto_import", "true"),
+					resource.TestCheckResourceAttrSet("mssql_login.auto", "sid"),
+				),
+			},
+		},
+	})
+}
+
 func testAccMssqlLoginResourceConfig(name, password string) string {
 	return fmt.Sprintf(`
 resource "mssql_login" "test" {
@@ -91,6 +108,31 @@ resource "mssql_login" "app_login" {
 resource "mssql_user" "app_user" {
   username   = "app_user"
   login_name = mssql_login.app_login.name
+}
+`
+}
+
+func testAccMssqlLoginResourceAutoImportConfig() string {
+	return `
+resource "mssql_script" "seed_login" {
+  database_name = "master"
+  name          = "seed_login"
+  create_script = <<-SQL
+    IF NOT EXISTS (SELECT 1 FROM sys.server_principals WHERE [name] = 'auto_import_login')
+    BEGIN
+      CREATE LOGIN [auto_import_login] WITH PASSWORD = 'AutoImportP@ssw0rd1!';
+    END
+  SQL
+  delete_script = "DROP LOGIN IF EXISTS [auto_import_login];"
+  version       = "v1"
+}
+
+resource "mssql_login" "auto" {
+  name        = "auto_import_login"
+  password    = "AutoImportP@ssw0rd1!"
+  auto_import = true
+
+  depends_on = [mssql_script.seed_login]
 }
 `
 }

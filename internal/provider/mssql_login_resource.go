@@ -295,6 +295,7 @@ func (r *MssqlLoginResource) ImportState(ctx context.Context, req resource.Impor
 	if login.Sid != "" {
 		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("sid"), login.Sid)...)
 	}
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("auto_import"), false)...)
 
 	// Password cannot be imported - user will need to set it
 	resp.Diagnostics.AddWarning(
