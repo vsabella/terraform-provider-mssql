@@ -43,6 +43,27 @@ type MssqlLoginResourceModel struct {
 	AutoImport      types.Bool   `tfsdk:"auto_import"`
 }
 
+type normalizeLoginSidPlanModifier struct{}
+
+func (m normalizeLoginSidPlanModifier) Description(ctx context.Context) string {
+	return "Normalizes login SID to lowercase (case-insensitive on SQL Server, but Terraform diffs are case-sensitive)."
+}
+
+func (m normalizeLoginSidPlanModifier) MarkdownDescription(ctx context.Context) string {
+	return "Normalizes login SID to lowercase (case-insensitive on SQL Server, but Terraform diffs are case-sensitive)."
+}
+
+func (m normalizeLoginSidPlanModifier) PlanModifyString(ctx context.Context, req planmodifier.StringRequest, resp *planmodifier.StringResponse) {
+	if req.ConfigValue.IsNull() || req.ConfigValue.IsUnknown() {
+		return
+	}
+	v := strings.TrimSpace(req.ConfigValue.ValueString())
+	if v == "" {
+		return
+	}
+	resp.PlanValue = types.StringValue(strings.ToLower(v))
+}
+
 func (r *MssqlLoginResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
 	resp.TypeName = req.ProviderTypeName + "_login"
 }
@@ -88,6 +109,7 @@ func (r *MssqlLoginResource) Schema(ctx context.Context, req resource.SchemaRequ
 				Optional:            true,
 				Computed:            true,
 				PlanModifiers: []planmodifier.String{
+					normalizeLoginSidPlanModifier{},
 					stringplanmodifier.RequiresReplace(),
 					stringplanmodifier.UseStateForUnknown(),
 				},

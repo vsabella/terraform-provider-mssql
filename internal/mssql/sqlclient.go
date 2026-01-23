@@ -1060,7 +1060,14 @@ func (m *client) GetLogin(ctx context.Context, name string) (Login, error) {
 	result := m.conn.QueryRowContext(ctx, cmd, sql.Named("name", name))
 
 	err := result.Scan(&login.Name, &login.DefaultDatabase, &login.DefaultLanguage, &login.IsDisabled, &login.Sid)
-	return login, err
+	if err != nil {
+		return login, err
+	}
+
+	// Normalize to a consistent form so Terraform doesn't see case-only diffs.
+	login.Sid = strings.ToLower(strings.TrimSpace(login.Sid))
+
+	return login, nil
 }
 
 func (m *client) CreateLogin(ctx context.Context, create CreateLogin) (Login, error) {
@@ -1072,9 +1079,11 @@ func (m *client) CreateLogin(ctx context.Context, create CreateLogin) (Login, er
 	if create.Password == "" {
 		return login, fmt.Errorf("invalid login password: must not be empty")
 	}
+	create.Sid = strings.TrimSpace(create.Sid)
 	if err := validateLoginSid(create.Sid); err != nil {
 		return login, err
 	}
+	create.Sid = strings.ToLower(create.Sid)
 	if create.DefaultDatabase != "" {
 		if err := validateIdentifier("default database", create.DefaultDatabase); err != nil {
 			return login, err
