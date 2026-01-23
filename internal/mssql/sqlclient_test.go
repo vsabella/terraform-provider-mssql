@@ -277,6 +277,7 @@ func Test_validateLoginSid(t *testing.T) {
 	}{
 		{name: "empty ok", sid: "", wantErr: false},
 		{name: "valid sid", sid: "0x010500000000000515000000", wantErr: false},
+		{name: "valid uppercase sid", sid: "0xD08B09D22C942847A8562F9A6178854E", wantErr: false},
 		{name: "missing 0x prefix", sid: "0105000000", wantErr: true},
 		{name: "odd length", sid: "0x123", wantErr: true},
 		{name: "invalid chars", sid: "0x12ZZ", wantErr: true},
@@ -307,19 +308,22 @@ func Test_CreateLogin_WithSid(t *testing.T) {
 		Name:            "test_login",
 		Password:        "Password123!",
 		DefaultDatabase: "master",
-		Sid:             "0x010500000000000515000000",
+		// Use mixed-case hex to ensure SID casing is normalized by the client/provider.
+		Sid: "0xD08B09D22C942847A8562F9A6178854E",
 	}
+	wantSid := strings.ToLower(create.Sid)
 
 	mock.ExpectExec("CREATE LOGIN").
 		WithArgs(
 			sql.Named("name", create.Name),
 			sql.Named("password", create.Password),
 			sql.Named("default_database", create.DefaultDatabase),
-			sql.Named("sid", create.Sid),
+			sql.Named("sid", wantSid),
 		).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	rows := sqlmock.NewRows([]string{"name", "default_database", "default_language", "is_disabled", "sid"}).
+		// Simulate SQL Server returning the SID in the original (mixed/upper) casing.
 		AddRow(create.Name, "master", "", false, create.Sid)
 	mock.ExpectQuery("FROM sys.server_principals").
 		WithArgs(sql.Named("name", create.Name)).
@@ -329,8 +333,8 @@ func Test_CreateLogin_WithSid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateLogin() error = %v", err)
 	}
-	if login.Sid != create.Sid {
-		t.Fatalf("CreateLogin() sid = %s, want %s", login.Sid, create.Sid)
+	if login.Sid != wantSid {
+		t.Fatalf("CreateLogin() sid = %s, want %s", login.Sid, wantSid)
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {
