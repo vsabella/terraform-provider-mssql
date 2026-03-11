@@ -113,25 +113,19 @@ resource "mssql_role_assignment" "telemetry_state_reader" {
 }
 
 func (r *MssqlRoleAssignmentResource) Configure(ctx context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
-	// Prevent panic if the provider has not been configured.
-	if req.ProviderData == nil {
-		return
-	}
-	client, ok := req.ProviderData.(*core.ProviderData)
-
+	client, ok := configureResourceProviderData("mssql_role_assignment", req.ProviderData, &resp.Diagnostics)
 	if !ok {
-		resp.Diagnostics.AddError(
-			"Unexpected Resource Configure Type",
-			fmt.Sprintf("Expected *core.ProviderData, got: %T. Please report this issue to the provider developers.", req.ProviderData),
-		)
-
 		return
 	}
 
-	r.ctx = *client
+	r.ctx = client
 }
 
 func (r *MssqlRoleAssignmentResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+	if !ensureProviderReady("mssql_role_assignment", r.ctx, &resp.Diagnostics) {
+		return
+	}
+
 	var data MssqlRoleAssignmentResourceModel
 
 	// Read Terraform plan data into the model
@@ -178,6 +172,10 @@ func (r *MssqlRoleAssignmentResource) Create(ctx context.Context, req resource.C
 }
 
 func (r *MssqlRoleAssignmentResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+	if !ensureProviderReady("mssql_role_assignment", r.ctx, &resp.Diagnostics) {
+		return
+	}
+
 	var data MssqlRoleAssignmentResourceModel
 
 	// Read Terraform prior state data into the model
@@ -188,6 +186,16 @@ func (r *MssqlRoleAssignmentResource) Read(ctx context.Context, req resource.Rea
 
 	id := data.Id.ValueString()
 	isServer := data.ServerRole.ValueBool()
+	if id != "" {
+		parsedID, err := parseRoleAssignmentId(id)
+		if err != nil {
+			resp.Diagnostics.AddError("Invalid role assignment ID", err.Error())
+			return
+		}
+		if !ensureServerIDMatch("mssql_role_assignment", parsedID.ServerID, r.ctx.ServerID, &resp.Diagnostics) {
+			return
+		}
+	}
 
 	// Parse ID if fields are missing.
 	if id != "" && (data.Role.IsNull() || data.Role.ValueString() == "" || data.Principal.IsNull() || data.Principal.ValueString() == "" || data.ServerRole.IsNull() || (data.Database.IsNull() && !isServer)) {
@@ -242,6 +250,10 @@ func (r *MssqlRoleAssignmentResource) Read(ctx context.Context, req resource.Rea
 }
 
 func (r *MssqlRoleAssignmentResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	if !ensureProviderReady("mssql_role_assignment", r.ctx, &resp.Diagnostics) {
+		return
+	}
+
 	var data MssqlRoleAssignmentResourceModel
 
 	// Read Terraform plan data into the model
@@ -254,6 +266,10 @@ func (r *MssqlRoleAssignmentResource) Update(ctx context.Context, req resource.U
 }
 
 func (r *MssqlRoleAssignmentResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+	if !ensureProviderReady("mssql_role_assignment", r.ctx, &resp.Diagnostics) {
+		return
+	}
+
 	var data MssqlRoleAssignmentResourceModel
 
 	// Read Terraform prior state data into the model
@@ -264,6 +280,16 @@ func (r *MssqlRoleAssignmentResource) Delete(ctx context.Context, req resource.D
 
 	id := data.Id.ValueString()
 	isServer := data.ServerRole.ValueBool()
+	if id != "" {
+		parsedID, err := parseRoleAssignmentId(id)
+		if err != nil {
+			resp.Diagnostics.AddError("Invalid role assignment ID", err.Error())
+			return
+		}
+		if !ensureServerIDMatch("mssql_role_assignment", parsedID.ServerID, r.ctx.ServerID, &resp.Diagnostics) {
+			return
+		}
+	}
 
 	if id != "" && (data.Role.IsNull() || data.Principal.IsNull() || data.ServerRole.IsNull() || (data.Database.IsNull() && !isServer)) {
 		parsed, err := parseRoleAssignmentId(id)
@@ -301,12 +327,19 @@ func (r *MssqlRoleAssignmentResource) Delete(ctx context.Context, req resource.D
 }
 
 func (r *MssqlRoleAssignmentResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+	if !ensureProviderReady("mssql_role_assignment", r.ctx, &resp.Diagnostics) {
+		return
+	}
+
 	// Import ID must be:
 	// - <server_id>/db/<database>/<role>/<principal>
 	// - <server_id>/server/<role>/<principal>
 	parsed, err := parseRoleAssignmentId(req.ID)
 	if err != nil {
 		resp.Diagnostics.AddError("Invalid import ID", err.Error())
+		return
+	}
+	if !ensureServerIDMatch("mssql_role_assignment", parsed.ServerID, r.ctx.ServerID, &resp.Diagnostics) {
 		return
 	}
 
@@ -325,6 +358,7 @@ func (r *MssqlRoleAssignmentResource) ImportState(ctx context.Context, req resou
 }
 
 type roleAssignmentId struct {
+	ServerID  string
 	IsServer  bool
 	Database  string
 	Role      string
@@ -353,7 +387,11 @@ func parseRoleAssignmentId(id string) (roleAssignmentId, error) {
 		if role == "" || principal == "" {
 			return roleAssignmentId{}, fmt.Errorf("expected id in format <server_id>/server/<role>/<principal>, got %q", id)
 		}
-		return roleAssignmentId{IsServer: true, Role: role, Principal: principal}, nil
+		serverID, err := url.QueryUnescape(parts[0])
+		if err != nil {
+			return roleAssignmentId{}, err
+		}
+		return roleAssignmentId{ServerID: serverID, IsServer: true, Role: role, Principal: principal}, nil
 	case "db":
 		if len(parts) != 5 {
 			return roleAssignmentId{}, fmt.Errorf("expected id in format <server_id>/db/<database>/<role>/<principal>, got %q", id)
@@ -373,7 +411,11 @@ func parseRoleAssignmentId(id string) (roleAssignmentId, error) {
 		if db == "" || role == "" || principal == "" {
 			return roleAssignmentId{}, fmt.Errorf("expected id in format <server_id>/db/<database>/<role>/<principal>, got %q", id)
 		}
-		return roleAssignmentId{IsServer: false, Database: db, Role: role, Principal: principal}, nil
+		serverID, err := url.QueryUnescape(parts[0])
+		if err != nil {
+			return roleAssignmentId{}, err
+		}
+		return roleAssignmentId{ServerID: serverID, IsServer: false, Database: db, Role: role, Principal: principal}, nil
 	default:
 		return roleAssignmentId{}, fmt.Errorf("expected id in format <server_id>/db/<database>/<role>/<principal> or <server_id>/server/<role>/<principal>, got %q", id)
 	}

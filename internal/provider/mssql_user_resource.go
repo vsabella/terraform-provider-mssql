@@ -125,25 +125,19 @@ func (r *MssqlUserResource) Schema(ctx context.Context, req resource.SchemaReque
 }
 
 func (r *MssqlUserResource) Configure(ctx context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
-	// Prevent panic if the provider has not been configured.
-	if req.ProviderData == nil {
-		return
-	}
-	client, ok := req.ProviderData.(*core.ProviderData)
-
+	client, ok := configureResourceProviderData("mssql_user", req.ProviderData, &resp.Diagnostics)
 	if !ok {
-		resp.Diagnostics.AddError(
-			"Unexpected Resource Configure Type",
-			fmt.Sprintf("Expected *core.ProviderData, got: %T. Please report this issue to the provider developers.", req.ProviderData),
-		)
-
 		return
 	}
 
-	r.ctx = *client
+	r.ctx = client
 }
 
 func (r *MssqlUserResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+	if !ensureProviderReady("mssql_user", r.ctx, &resp.Diagnostics) {
+		return
+	}
+
 	var data MssqlUserResourceModel
 
 	// Read Terraform plan data into the model
@@ -223,6 +217,10 @@ func userToResource(data *MssqlUserResourceModel, serverID string, database stri
 }
 
 func (r *MssqlUserResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+	if !ensureProviderReady("mssql_user", r.ctx, &resp.Diagnostics) {
+		return
+	}
+
 	var data MssqlUserResourceModel
 
 	// Read Terraform prior state data into the model
@@ -233,13 +231,25 @@ func (r *MssqlUserResource) Read(ctx context.Context, req resource.ReadRequest, 
 
 	database := data.Database.ValueString()
 	if data.Database.IsUnknown() || data.Database.IsNull() || database == "" || data.Username.IsNull() || data.Username.ValueString() == "" {
-		dbName, username, err := parseUserId(data.Id.ValueString())
+		idServerID, dbName, username, err := parseUserId(data.Id.ValueString())
 		if err != nil {
 			resp.Diagnostics.AddError("Invalid user ID", err.Error())
 			return
 		}
+		if !ensureServerIDMatch("mssql_user", idServerID, r.ctx.ServerID, &resp.Diagnostics) {
+			return
+		}
 		database = dbName
 		data.Username = types.StringValue(username)
+	} else if !data.Id.IsNull() && !data.Id.IsUnknown() && data.Id.ValueString() != "" {
+		idServerID, _, _, err := parseUserId(data.Id.ValueString())
+		if err != nil {
+			resp.Diagnostics.AddError("Invalid user ID", err.Error())
+			return
+		}
+		if !ensureServerIDMatch("mssql_user", idServerID, r.ctx.ServerID, &resp.Diagnostics) {
+			return
+		}
 	}
 
 	user, err := r.ctx.Client.GetUser(ctx, database, data.Username.ValueString())
@@ -253,17 +263,40 @@ func (r *MssqlUserResource) Read(ctx context.Context, req resource.ReadRequest, 
 		return
 	}
 
+	// Azure SQL can hide server-level login metadata in user DB contexts.
+	// Preserve configured login_name from prior state when lookup is unavailable.
+	if user.LoginName == "" && !data.LoginName.IsNull() && !data.LoginName.IsUnknown() {
+		user.LoginName = data.LoginName.ValueString()
+	}
+
 	userToResource(&data, r.ctx.ServerID, database, user)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
 func (r *MssqlUserResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	if !ensureProviderReady("mssql_user", r.ctx, &resp.Diagnostics) {
+		return
+	}
+
 	var data MssqlUserResourceModel
+	var state MssqlUserResourceModel
 
 	// Read Terraform plan data into the model
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
+	}
+
+	if !state.Id.IsNull() && !state.Id.IsUnknown() && state.Id.ValueString() != "" {
+		idServerID, _, _, err := parseUserId(state.Id.ValueString())
+		if err != nil {
+			resp.Diagnostics.AddError("Invalid user ID", err.Error())
+			return
+		}
+		if !ensureServerIDMatch("mssql_user", idServerID, r.ctx.ServerID, &resp.Diagnostics) {
+			return
+		}
 	}
 
 	user := mssql.UpdateUser{
@@ -293,6 +326,10 @@ func (r *MssqlUserResource) Update(ctx context.Context, req resource.UpdateReque
 }
 
 func (r *MssqlUserResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+	if !ensureProviderReady("mssql_user", r.ctx, &resp.Diagnostics) {
+		return
+	}
+
 	var data MssqlUserResourceModel
 
 	// Read Terraform prior state data into the model
@@ -303,13 +340,25 @@ func (r *MssqlUserResource) Delete(ctx context.Context, req resource.DeleteReque
 
 	database := data.Database.ValueString()
 	if data.Database.IsUnknown() || data.Database.IsNull() || database == "" || data.Username.IsNull() || data.Username.ValueString() == "" {
-		dbName, username, err := parseUserId(data.Id.ValueString())
+		idServerID, dbName, username, err := parseUserId(data.Id.ValueString())
 		if err != nil {
 			resp.Diagnostics.AddError("Invalid user ID", err.Error())
 			return
 		}
+		if !ensureServerIDMatch("mssql_user", idServerID, r.ctx.ServerID, &resp.Diagnostics) {
+			return
+		}
 		database = dbName
 		data.Username = types.StringValue(username)
+	} else if !data.Id.IsNull() && !data.Id.IsUnknown() && data.Id.ValueString() != "" {
+		idServerID, _, _, err := parseUserId(data.Id.ValueString())
+		if err != nil {
+			resp.Diagnostics.AddError("Invalid user ID", err.Error())
+			return
+		}
+		if !ensureServerIDMatch("mssql_user", idServerID, r.ctx.ServerID, &resp.Diagnostics) {
+			return
+		}
 	}
 
 	err := r.ctx.Client.DeleteUser(ctx, database, data.Username.ValueString())
@@ -320,10 +369,17 @@ func (r *MssqlUserResource) Delete(ctx context.Context, req resource.DeleteReque
 }
 
 func (r *MssqlUserResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+	if !ensureProviderReady("mssql_user", r.ctx, &resp.Diagnostics) {
+		return
+	}
+
 	// Import ID must be <server_id>/<database>/<username>
-	database, username, err := parseUserId(req.ID)
+	idServerID, database, username, err := parseUserId(req.ID)
 	if err != nil {
 		resp.Diagnostics.AddError("Invalid import ID", err.Error())
+		return
+	}
+	if !ensureServerIDMatch("mssql_user", idServerID, r.ctx.ServerID, &resp.Diagnostics) {
 		return
 	}
 
@@ -332,18 +388,22 @@ func (r *MssqlUserResource) ImportState(ctx context.Context, req resource.Import
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), fmt.Sprintf("%s/%s/%s", r.ctx.ServerID, database, username))...)
 }
 
-func parseUserId(id string) (string, string, error) {
+func parseUserId(id string) (string, string, string, error) {
 	parts := strings.Split(id, "/")
 	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
-		return "", "", fmt.Errorf("expected id in format <server_id>/<database>/<username>, got %q", id)
+		return "", "", "", fmt.Errorf("expected id in format <server_id>/<database>/<username>, got %q", id)
+	}
+	serverID, err := url.QueryUnescape(parts[0])
+	if err != nil {
+		return "", "", "", err
 	}
 	db, err := url.QueryUnescape(parts[1])
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	username, err := url.QueryUnescape(parts[2])
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
-	return db, username, nil
+	return serverID, db, username, nil
 }

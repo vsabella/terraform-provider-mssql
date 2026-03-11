@@ -161,25 +161,19 @@ func (r *MssqlDatabaseResource) Schema(ctx context.Context, req resource.SchemaR
 }
 
 func (r *MssqlDatabaseResource) Configure(ctx context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
-	// Prevent panic if the provider has not been configured.
-	if req.ProviderData == nil {
-		return
-	}
-	client, ok := req.ProviderData.(*core.ProviderData)
-
+	client, ok := configureResourceProviderData("mssql_database", req.ProviderData, &resp.Diagnostics)
 	if !ok {
-		resp.Diagnostics.AddError(
-			"Unexpected Resource Configure Type",
-			fmt.Sprintf("Expected *core.ProviderData, got: %T. Please report this issue to the provider developers.", req.ProviderData),
-		)
-
 		return
 	}
 
-	r.ctx = *client
+	r.ctx = client
 }
 
 func (r *MssqlDatabaseResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+	if !ensureProviderReady("mssql_database", r.ctx, &resp.Diagnostics) {
+		return
+	}
+
 	resLock.Lock()
 	defer resLock.Unlock()
 
@@ -221,6 +215,10 @@ func (r *MssqlDatabaseResource) Create(ctx context.Context, req resource.CreateR
 }
 
 func (r *MssqlDatabaseResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+	if !ensureProviderReady("mssql_database", r.ctx, &resp.Diagnostics) {
+		return
+	}
+
 	var state MssqlDatabaseResourceModel
 
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
@@ -230,12 +228,24 @@ func (r *MssqlDatabaseResource) Read(ctx context.Context, req resource.ReadReque
 
 	databaseName := state.Name.ValueString()
 	if state.Name.IsUnknown() || state.Name.IsNull() || databaseName == "" {
-		dbName, err := parseDatabaseId(state.Id.ValueString())
+		idServerID, dbName, err := parseDatabaseId(state.Id.ValueString())
 		if err != nil {
 			resp.Diagnostics.AddError("Invalid database ID", err.Error())
 			return
 		}
+		if !ensureServerIDMatch("mssql_database", idServerID, r.ctx.ServerID, &resp.Diagnostics) {
+			return
+		}
 		databaseName = dbName
+	} else if !state.Id.IsNull() && !state.Id.IsUnknown() && state.Id.ValueString() != "" {
+		idServerID, _, err := parseDatabaseId(state.Id.ValueString())
+		if err != nil {
+			resp.Diagnostics.AddError("Invalid database ID", err.Error())
+			return
+		}
+		if !ensureServerIDMatch("mssql_database", idServerID, r.ctx.ServerID, &resp.Diagnostics) {
+			return
+		}
 	}
 	if databaseName == "" {
 		resp.Diagnostics.AddError("Unable to read database", "Database name is missing from state")
@@ -264,6 +274,10 @@ func (r *MssqlDatabaseResource) Read(ctx context.Context, req resource.ReadReque
 }
 
 func (r *MssqlDatabaseResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	if !ensureProviderReady("mssql_database", r.ctx, &resp.Diagnostics) {
+		return
+	}
+
 	resLock.Lock()
 	defer resLock.Unlock()
 
@@ -273,6 +287,16 @@ func (r *MssqlDatabaseResource) Update(ctx context.Context, req resource.UpdateR
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
+	}
+	if !state.Id.IsNull() && !state.Id.IsUnknown() && state.Id.ValueString() != "" {
+		idServerID, _, err := parseDatabaseId(state.Id.ValueString())
+		if err != nil {
+			resp.Diagnostics.AddError("Invalid database ID", err.Error())
+			return
+		}
+		if !ensureServerIDMatch("mssql_database", idServerID, r.ctx.ServerID, &resp.Diagnostics) {
+			return
+		}
 	}
 
 	// we don't support updating database name as there should not be any reason to do so.
@@ -321,6 +345,10 @@ func (r *MssqlDatabaseResource) Update(ctx context.Context, req resource.UpdateR
 }
 
 func (r *MssqlDatabaseResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+	if !ensureProviderReady("mssql_database", r.ctx, &resp.Diagnostics) {
+		return
+	}
+
 	resLock.Lock()
 	defer resLock.Unlock()
 
@@ -331,6 +359,16 @@ func (r *MssqlDatabaseResource) Delete(ctx context.Context, req resource.DeleteR
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	if !data.Id.IsNull() && !data.Id.IsUnknown() && data.Id.ValueString() != "" {
+		idServerID, _, err := parseDatabaseId(data.Id.ValueString())
+		if err != nil {
+			resp.Diagnostics.AddError("Invalid database ID", err.Error())
+			return
+		}
+		if !ensureServerIDMatch("mssql_database", idServerID, r.ctx.ServerID, &resp.Diagnostics) {
+			return
+		}
+	}
 
 	tflog.Warn(ctx, fmt.Sprintf("Database %s will not be deleted. Terraform will remove it from state but the database will remain on the server.", data.Name.ValueString()))
 	resp.Diagnostics.AddWarning(
@@ -340,10 +378,17 @@ func (r *MssqlDatabaseResource) Delete(ctx context.Context, req resource.DeleteR
 }
 
 func (r *MssqlDatabaseResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+	if !ensureProviderReady("mssql_database", r.ctx, &resp.Diagnostics) {
+		return
+	}
+
 	// Import ID must be <server_id>/<database>
-	dbName, err := parseDatabaseId(req.ID)
+	idServerID, dbName, err := parseDatabaseId(req.ID)
 	if err != nil {
 		resp.Diagnostics.AddError("Invalid import ID", err.Error())
+		return
+	}
+	if !ensureServerIDMatch("mssql_database", idServerID, r.ctx.ServerID, &resp.Diagnostics) {
 		return
 	}
 
@@ -418,16 +463,20 @@ func (r *MssqlDatabaseResource) ImportState(ctx context.Context, req resource.Im
 	}
 }
 
-func parseDatabaseId(id string) (string, error) {
+func parseDatabaseId(id string) (string, string, error) {
 	parts := strings.Split(id, "/")
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return "", fmt.Errorf("expected id in format <server_id>/<database>, got %q", id)
+		return "", "", fmt.Errorf("expected id in format <server_id>/<database>, got %q", id)
+	}
+	serverID, err := url.QueryUnescape(parts[0])
+	if err != nil {
+		return "", "", err
 	}
 	db, err := url.QueryUnescape(parts[1])
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	return db, nil
+	return serverID, db, nil
 }
 
 func (r *MssqlDatabaseResource) applyDatabaseOptions(ctx context.Context, data *MssqlDatabaseResourceModel) error {

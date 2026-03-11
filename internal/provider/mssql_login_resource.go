@@ -64,6 +64,21 @@ func (m normalizeLoginSidPlanModifier) PlanModifyString(ctx context.Context, req
 	resp.PlanValue = types.StringValue(strings.ToLower(v))
 }
 
+func hasLoginSidMismatch(configSid types.String, existingSid string) bool {
+	if configSid.IsNull() || configSid.IsUnknown() {
+		return false
+	}
+	configured := strings.TrimSpace(configSid.ValueString())
+	if configured == "" {
+		return false
+	}
+	existing := strings.TrimSpace(existingSid)
+	if existing == "" {
+		return false
+	}
+	return !strings.EqualFold(configured, existing)
+}
+
 func (r *MssqlLoginResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
 	resp.TypeName = req.ProviderTypeName + "_login"
 }
@@ -125,23 +140,19 @@ func (r *MssqlLoginResource) Schema(ctx context.Context, req resource.SchemaRequ
 }
 
 func (r *MssqlLoginResource) Configure(ctx context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
-	if req.ProviderData == nil {
-		return
-	}
-	client, ok := req.ProviderData.(*core.ProviderData)
-
+	client, ok := configureResourceProviderData("mssql_login", req.ProviderData, &resp.Diagnostics)
 	if !ok {
-		resp.Diagnostics.AddError(
-			"Unexpected Resource Configure Type",
-			fmt.Sprintf("Expected *core.ProviderData, got: %T. Please report this issue to the provider developers.", req.ProviderData),
-		)
 		return
 	}
 
-	r.ctx = *client
+	r.ctx = client
 }
 
 func (r *MssqlLoginResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+	if !ensureProviderReady("mssql_login", r.ctx, &resp.Diagnostics) {
+		return
+	}
+
 	var data MssqlLoginResourceModel
 
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
@@ -161,8 +172,7 @@ func (r *MssqlLoginResource) Create(ctx context.Context, req resource.CreateRequ
 	if data.AutoImport.ValueBool() {
 		login, err := r.ctx.Client.GetLogin(ctx, create.Name)
 		if err == nil {
-			if !data.Sid.IsNull() && !data.Sid.IsUnknown() && data.Sid.ValueString() != "" &&
-				login.Sid != "" && !strings.EqualFold(data.Sid.ValueString(), login.Sid) {
+			if hasLoginSidMismatch(data.Sid, login.Sid) {
 				resp.Diagnostics.AddError(
 					"Existing login SID mismatch",
 					fmt.Sprintf("Login %s already exists with SID %s, which does not match the configured SID %s.",
@@ -184,6 +194,25 @@ func (r *MssqlLoginResource) Create(ctx context.Context, req resource.CreateRequ
 
 	login, err := r.ctx.Client.CreateLogin(ctx, create)
 	if err != nil {
+		// Some platforms can report "already exists" at create time even when the
+		// pre-read in auto_import mode did not find the login. Fall back to adopt.
+		if data.AutoImport.ValueBool() && strings.Contains(strings.ToLower(err.Error()), "already exists") {
+			existing, getErr := r.ctx.Client.GetLogin(ctx, create.Name)
+			if getErr == nil {
+				if hasLoginSidMismatch(data.Sid, existing.Sid) {
+					resp.Diagnostics.AddError(
+						"Existing login SID mismatch",
+						fmt.Sprintf("Login %s already exists with SID %s, which does not match the configured SID %s.",
+							create.Name, existing.Sid, data.Sid.ValueString()),
+					)
+					return
+				}
+				loginToResourceWithServer(&data, existing, r.ctx.ServerID)
+				tflog.Debug(ctx, fmt.Sprintf("Adopted existing login %s after create conflict", data.Name.ValueString()))
+				resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
+				return
+			}
+		}
 		resp.Diagnostics.AddError(fmt.Sprintf("Error creating login %s", create.Name), err.Error())
 		return
 	}
@@ -208,19 +237,27 @@ func loginToResourceWithServer(data *MssqlLoginResourceModel, login mssql.Login,
 	}
 }
 
-func parseLoginId(id string) (string, error) {
+func parseLoginId(id string) (string, string, error) {
 	parts := strings.SplitN(id, "/", 2)
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return "", fmt.Errorf("expected id in format <server_id>/<login_name>, got %q", id)
+		return "", "", fmt.Errorf("expected id in format <server_id>/<login_name>, got %q", id)
+	}
+	serverID, err := url.QueryUnescape(parts[0])
+	if err != nil {
+		return "", "", err
 	}
 	loginName, err := url.QueryUnescape(parts[1])
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	return loginName, nil
+	return serverID, loginName, nil
 }
 
 func (r *MssqlLoginResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+	if !ensureProviderReady("mssql_login", r.ctx, &resp.Diagnostics) {
+		return
+	}
+
 	var data MssqlLoginResourceModel
 
 	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
@@ -228,9 +265,12 @@ func (r *MssqlLoginResource) Read(ctx context.Context, req resource.ReadRequest,
 		return
 	}
 
-	loginName, err := parseLoginId(data.Id.ValueString())
+	idServerID, loginName, err := parseLoginId(data.Id.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError("Invalid login ID", err.Error())
+		return
+	}
+	if !ensureServerIDMatch("mssql_login", idServerID, r.ctx.ServerID, &resp.Diagnostics) {
 		return
 	}
 	login, err := r.ctx.Client.GetLogin(ctx, loginName)
@@ -250,11 +290,27 @@ func (r *MssqlLoginResource) Read(ctx context.Context, req resource.ReadRequest,
 }
 
 func (r *MssqlLoginResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	if !ensureProviderReady("mssql_login", r.ctx, &resp.Diagnostics) {
+		return
+	}
+
 	var data MssqlLoginResourceModel
+	var state MssqlLoginResourceModel
 
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
+	}
+	if !state.Id.IsNull() && !state.Id.IsUnknown() && state.Id.ValueString() != "" {
+		idServerID, _, err := parseLoginId(state.Id.ValueString())
+		if err != nil {
+			resp.Diagnostics.AddError("Invalid login ID", err.Error())
+			return
+		}
+		if !ensureServerIDMatch("mssql_login", idServerID, r.ctx.ServerID, &resp.Diagnostics) {
+			return
+		}
 	}
 
 	update := mssql.UpdateLogin{
@@ -277,6 +333,10 @@ func (r *MssqlLoginResource) Update(ctx context.Context, req resource.UpdateRequ
 }
 
 func (r *MssqlLoginResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+	if !ensureProviderReady("mssql_login", r.ctx, &resp.Diagnostics) {
+		return
+	}
+
 	var data MssqlLoginResourceModel
 
 	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
@@ -284,9 +344,12 @@ func (r *MssqlLoginResource) Delete(ctx context.Context, req resource.DeleteRequ
 		return
 	}
 
-	loginName, err := parseLoginId(data.Id.ValueString())
+	idServerID, loginName, err := parseLoginId(data.Id.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError("Invalid login ID", err.Error())
+		return
+	}
+	if !ensureServerIDMatch("mssql_login", idServerID, r.ctx.ServerID, &resp.Diagnostics) {
 		return
 	}
 	if err := r.ctx.Client.DeleteLogin(ctx, loginName); err != nil {
@@ -296,10 +359,17 @@ func (r *MssqlLoginResource) Delete(ctx context.Context, req resource.DeleteRequ
 }
 
 func (r *MssqlLoginResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+	if !ensureProviderReady("mssql_login", r.ctx, &resp.Diagnostics) {
+		return
+	}
+
 	// Import ID: <server_id>/<login_name>
-	loginName, err := parseLoginId(req.ID)
+	idServerID, loginName, err := parseLoginId(req.ID)
 	if err != nil {
 		resp.Diagnostics.AddError("Invalid import ID", err.Error())
+		return
+	}
+	if !ensureServerIDMatch("mssql_login", idServerID, r.ctx.ServerID, &resp.Diagnostics) {
 		return
 	}
 

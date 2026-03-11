@@ -76,25 +76,19 @@ func (r *MssqlRoleResource) Schema(ctx context.Context, req resource.SchemaReque
 }
 
 func (r *MssqlRoleResource) Configure(ctx context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
-	// Prevent panic if the provider has not been configured.
-	if req.ProviderData == nil {
-		return
-	}
-	client, ok := req.ProviderData.(*core.ProviderData)
-
+	client, ok := configureResourceProviderData("mssql_role", req.ProviderData, &resp.Diagnostics)
 	if !ok {
-		resp.Diagnostics.AddError(
-			"Unexpected Resource Configure Type",
-			fmt.Sprintf("Expected *core.ProviderData, got: %T. Please report this issue to the provider developers.", req.ProviderData),
-		)
-
 		return
 	}
 
-	r.ctx = *client
+	r.ctx = client
 }
 
 func (r *MssqlRoleResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+	if !ensureProviderReady("mssql_role", r.ctx, &resp.Diagnostics) {
+		return
+	}
+
 	var data MssqlRoleResourceModel
 
 	// Read Terraform plan data into the model
@@ -112,7 +106,7 @@ func (r *MssqlRoleResource) Create(ctx context.Context, req resource.CreateReque
 
 	role, err := r.ctx.Client.CreateRole(ctx, database, data.Name.ValueString())
 	if err != nil {
-		resp.Diagnostics.AddError(fmt.Sprintf("Error creating role %s", data.Id.ValueString()), err.Error())
+		resp.Diagnostics.AddError(fmt.Sprintf("Error creating role %s", data.Name.ValueString()), err.Error())
 		return
 	}
 
@@ -125,6 +119,10 @@ func (r *MssqlRoleResource) Create(ctx context.Context, req resource.CreateReque
 }
 
 func (r *MssqlRoleResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	if !ensureProviderReady("mssql_role", r.ctx, &resp.Diagnostics) {
+		return
+	}
+
 	var data MssqlRoleResourceModel
 
 	// Read Terraform plan data into the model
@@ -136,6 +134,10 @@ func (r *MssqlRoleResource) Update(ctx context.Context, req resource.UpdateReque
 }
 
 func (r *MssqlRoleResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+	if !ensureProviderReady("mssql_role", r.ctx, &resp.Diagnostics) {
+		return
+	}
+
 	var data MssqlRoleResourceModel
 
 	// Read Terraform prior state data into the model
@@ -146,13 +148,25 @@ func (r *MssqlRoleResource) Read(ctx context.Context, req resource.ReadRequest, 
 
 	database := data.Database.ValueString()
 	if data.Database.IsUnknown() || data.Database.IsNull() || database == "" || data.Name.IsNull() || data.Name.ValueString() == "" {
-		dbName, roleName, err := parseRoleId(data.Id.ValueString())
+		idServerID, dbName, roleName, err := parseRoleId(data.Id.ValueString())
 		if err != nil {
 			resp.Diagnostics.AddError("Invalid role ID", err.Error())
 			return
 		}
+		if !ensureServerIDMatch("mssql_role", idServerID, r.ctx.ServerID, &resp.Diagnostics) {
+			return
+		}
 		database = dbName
 		data.Name = types.StringValue(roleName)
+	} else if !data.Id.IsNull() && !data.Id.IsUnknown() && data.Id.ValueString() != "" {
+		idServerID, _, _, err := parseRoleId(data.Id.ValueString())
+		if err != nil {
+			resp.Diagnostics.AddError("Invalid role ID", err.Error())
+			return
+		}
+		if !ensureServerIDMatch("mssql_role", idServerID, r.ctx.ServerID, &resp.Diagnostics) {
+			return
+		}
 	}
 
 	role, err := r.ctx.Client.GetRole(ctx, database, data.Name.ValueString())
@@ -173,6 +187,10 @@ func (r *MssqlRoleResource) Read(ctx context.Context, req resource.ReadRequest, 
 }
 
 func (r *MssqlRoleResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+	if !ensureProviderReady("mssql_role", r.ctx, &resp.Diagnostics) {
+		return
+	}
+
 	var data MssqlRoleResourceModel
 
 	// Read Terraform prior state data into the model
@@ -183,13 +201,25 @@ func (r *MssqlRoleResource) Delete(ctx context.Context, req resource.DeleteReque
 
 	database := data.Database.ValueString()
 	if data.Database.IsUnknown() || data.Database.IsNull() || database == "" || data.Name.IsNull() || data.Name.ValueString() == "" {
-		dbName, roleName, err := parseRoleId(data.Id.ValueString())
+		idServerID, dbName, roleName, err := parseRoleId(data.Id.ValueString())
 		if err != nil {
 			resp.Diagnostics.AddError("Invalid role ID", err.Error())
 			return
 		}
+		if !ensureServerIDMatch("mssql_role", idServerID, r.ctx.ServerID, &resp.Diagnostics) {
+			return
+		}
 		database = dbName
 		data.Name = types.StringValue(roleName)
+	} else if !data.Id.IsNull() && !data.Id.IsUnknown() && data.Id.ValueString() != "" {
+		idServerID, _, _, err := parseRoleId(data.Id.ValueString())
+		if err != nil {
+			resp.Diagnostics.AddError("Invalid role ID", err.Error())
+			return
+		}
+		if !ensureServerIDMatch("mssql_role", idServerID, r.ctx.ServerID, &resp.Diagnostics) {
+			return
+		}
 	}
 
 	err := r.ctx.Client.DeleteRole(ctx, database, data.Name.ValueString())
@@ -200,10 +230,17 @@ func (r *MssqlRoleResource) Delete(ctx context.Context, req resource.DeleteReque
 }
 
 func (r *MssqlRoleResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+	if !ensureProviderReady("mssql_role", r.ctx, &resp.Diagnostics) {
+		return
+	}
+
 	// Import ID must be <server_id>/<database>/<role>
-	database, name, err := parseRoleId(req.ID)
+	idServerID, database, name, err := parseRoleId(req.ID)
 	if err != nil {
 		resp.Diagnostics.AddError("Invalid import ID", err.Error())
+		return
+	}
+	if !ensureServerIDMatch("mssql_role", idServerID, r.ctx.ServerID, &resp.Diagnostics) {
 		return
 	}
 
@@ -212,18 +249,22 @@ func (r *MssqlRoleResource) ImportState(ctx context.Context, req resource.Import
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), fmt.Sprintf("%s/%s/%s", r.ctx.ServerID, database, name))...)
 }
 
-func parseRoleId(id string) (string, string, error) {
+func parseRoleId(id string) (string, string, string, error) {
 	parts := strings.Split(id, "/")
 	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
-		return "", "", fmt.Errorf("expected id in format <server_id>/<database>/<role>, got %q", id)
+		return "", "", "", fmt.Errorf("expected id in format <server_id>/<database>/<role>, got %q", id)
+	}
+	serverID, err := url.QueryUnescape(parts[0])
+	if err != nil {
+		return "", "", "", err
 	}
 	db, err := url.QueryUnescape(parts[1])
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	name, err := url.QueryUnescape(parts[2])
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
-	return db, name, nil
+	return serverID, db, name, nil
 }

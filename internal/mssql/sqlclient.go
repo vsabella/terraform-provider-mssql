@@ -3,6 +3,7 @@ package mssql
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -100,6 +101,104 @@ func (m *client) getConnForDatabase(database string) (*sql.DB, error) {
 	return existing, nil
 }
 
+// databaseExists checks if the target database exists and is visible.
+func (m *client) databaseExists(ctx context.Context, database string) (bool, error) {
+	if strings.TrimSpace(database) == "" {
+		return false, fmt.Errorf("database cannot be empty")
+	}
+
+	result := m.conn.QueryRowContext(ctx,
+		`SELECT 1 FROM sys.databases WHERE [name] = @name`,
+		sql.Named("name", database),
+	)
+
+	var exists int
+	err := result.Scan(&exists)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+
+	return true, nil
+}
+
+// getConnForExistingDatabase returns (conn, true, nil) when database exists,
+// (nil, false, nil) when it does not exist, and an error for unexpected failures.
+func (m *client) getConnForExistingDatabase(ctx context.Context, database string) (*sql.DB, bool, error) {
+	exists, err := m.databaseExists(ctx, database)
+	if err != nil {
+		return nil, false, err
+	}
+	if !exists {
+		return nil, false, nil
+	}
+
+	conn, err := m.getConnForDatabase(database)
+	if err != nil {
+		return nil, false, err
+	}
+	return conn, true, nil
+}
+
+func isInvalidObjectNameError(err error, objectName string) bool {
+	if err == nil {
+		return false
+	}
+
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "invalid object name") && strings.Contains(msg, strings.ToLower(objectName))
+}
+
+func (m *client) lookupPrincipalNameBySid(ctx context.Context, query string, sid []byte, objectName string) (string, error) {
+	if len(sid) == 0 {
+		return "", nil
+	}
+
+	var name string
+	err := m.conn.QueryRowContext(ctx, query, sql.Named("sid", sid)).Scan(&name)
+	if err == nil {
+		return name, nil
+	}
+
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+
+	// Azure SQL user-database contexts may not expose all server catalog views.
+	// Missing-object errors are non-fatal for user existence; we simply can't resolve login_name.
+	if isInvalidObjectNameError(err, objectName) {
+		tflog.Debug(ctx, fmt.Sprintf("Skipping optional principal lookup against %s: %v", objectName, err))
+		return "", nil
+	}
+
+	return "", err
+}
+
+func (m *client) resolveLoginNameBySid(ctx context.Context, sid []byte) (string, error) {
+	loginName, err := m.lookupPrincipalNameBySid(
+		ctx,
+		`SELECT TOP 1 sp.[name]
+		 FROM sys.server_principals sp
+		 WHERE sp.[sid] = @sid`,
+		sid,
+		"sys.server_principals",
+	)
+	if err != nil || loginName != "" {
+		return loginName, err
+	}
+
+	return m.lookupPrincipalNameBySid(
+		ctx,
+		`SELECT TOP 1 l.[name]
+		 FROM sys.sql_logins l
+		 WHERE l.[sid] = @sid`,
+		sid,
+		"sys.sql_logins",
+	)
+}
+
 func (m *client) GetUser(ctx context.Context, database string, username string) (User, error) {
 	user := User{
 		Id: username,
@@ -117,16 +216,26 @@ func (m *client) GetUser(ctx context.Context, database string, username string) 
     P.[type] AS type,
     CASE WHEN P.[type] IN ('E', 'X') THEN 1 ELSE 0 END AS ext,
     COALESCE(P.[default_schema_name], '') AS default_schema_name,
-    COALESCE(SP.[name], '') AS login_name
+    P.[sid] AS sid_bytes
 FROM sys.database_principals P
-LEFT JOIN sys.server_principals SP ON P.[sid] = SP.[sid]
 WHERE P.[name] = @username`
 
 	tflog.Debug(ctx, fmt.Sprintf("Executing refresh query for username %s: command %s", username, cmd))
 	result := conn.QueryRowContext(ctx, cmd, sql.Named("username", username))
 
-	err = result.Scan(&user.Id, &user.Sid, &user.Username, &user.Type, &user.External, &user.DefaultSchema, &user.LoginName)
-	return user, err
+	var sidBytes []byte
+	err = result.Scan(&user.Id, &user.Sid, &user.Username, &user.Type, &user.External, &user.DefaultSchema, &sidBytes)
+	if err != nil {
+		return user, err
+	}
+
+	loginName, err := m.resolveLoginNameBySid(ctx, sidBytes)
+	if err != nil {
+		return user, err
+	}
+	user.LoginName = loginName
+
+	return user, nil
 }
 
 func (m *client) CreateUser(ctx context.Context, database string, create CreateUser) (User, error) {
@@ -265,16 +374,27 @@ func (m *client) UpdateUser(ctx context.Context, database string, update UpdateU
 }
 
 func (m *client) DeleteUser(ctx context.Context, database string, username string) error {
+	if err := validateIdentifier("database", database); err != nil {
+		return err
+	}
+	if err := validateIdentifier("username", username); err != nil {
+		return err
+	}
+
+	conn, exists, err := m.getConnForExistingDatabase(ctx, database)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		// Database is already gone; user is effectively absent.
+		return nil
+	}
+
 	cmd := `DECLARE @sql NVARCHAR(max);
           SET @sql = 'IF EXISTS (SELECT 1 FROM [sys].[database_principals] WHERE [type] IN (''E'',''S'',''X'') AND [name] = ' + QUOTENAME(@p1, '''') + ') DROP USER ' + QUOTENAME(@p2);
           EXEC (@sql);`
 
 	tflog.Debug(ctx, fmt.Sprintf("Deleting User %s: cmd: %s", username, cmd))
-
-	conn, err := m.getConnForDatabase(database)
-	if err != nil {
-		return err
-	}
 
 	_, err = conn.ExecContext(ctx,
 		cmd,
@@ -379,13 +499,33 @@ func (m *client) AssignRole(ctx context.Context, database string, role string, m
 }
 
 func (m *client) UnassignRole(ctx context.Context, database string, role string, principal string) error {
-	conn, err := m.getConnForDatabase(database)
-	if err != nil {
+	if err := validateIdentifier("database", database); err != nil {
+		return err
+	}
+	if err := validateIdentifier("role", role); err != nil {
+		return err
+	}
+	if err := validateIdentifier("principal", principal); err != nil {
 		return err
 	}
 
+	conn, exists, err := m.getConnForExistingDatabase(ctx, database)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		// Database is already gone; membership is effectively absent.
+		return nil
+	}
+
 	cmd := `DECLARE @sql NVARCHAR(max);
-          SET @sql = 'ALTER ROLE ' + QUOTENAME(@p1) + ' DROP MEMBER ' + QUOTENAME(@p2);
+          SET @sql = 'IF EXISTS (
+            SELECT 1
+            FROM [sys].[database_role_members] rm
+            JOIN [sys].[database_principals] r ON rm.[role_principal_id] = r.[principal_id]
+            JOIN [sys].[database_principals] m ON rm.[member_principal_id] = m.[principal_id]
+            WHERE r.[name] = ' + QUOTENAME(@p1, '''') + ' AND m.[name] = ' + QUOTENAME(@p2, '''') + '
+          ) ALTER ROLE ' + QUOTENAME(@p1) + ' DROP MEMBER ' + QUOTENAME(@p2);
           EXEC (@sql);`
 
 	tflog.Debug(ctx, fmt.Sprintf("Removing Principal %s from role %s: cmd: %s", principal, role, cmd))
@@ -466,8 +606,20 @@ func (m *client) UnassignServerRole(ctx context.Context, role string, principal 
 	}
 
 	cmd := `DECLARE @sql NVARCHAR(max);
-SET @sql = 'ALTER SERVER ROLE ' + QUOTENAME(@role) + ' DROP MEMBER ' + QUOTENAME(@principal);
-EXEC (@sql);`
+SET @sql = N'
+IF EXISTS (
+	SELECT 1
+	FROM sys.server_role_members rm
+	JOIN sys.server_principals r ON rm.role_principal_id = r.principal_id
+	JOIN sys.server_principals m ON rm.member_principal_id = m.principal_id
+	WHERE r.[name] = @role AND m.[name] = @principal
+)
+BEGIN
+	DECLARE @drop_stmt NVARCHAR(max);
+	SET @drop_stmt = N''ALTER SERVER ROLE '' + QUOTENAME(@role) + N'' DROP MEMBER '' + QUOTENAME(@principal);
+	EXEC (@drop_stmt);
+END';
+EXEC sp_executesql @sql, N'@role sysname, @principal sysname', @role=@role, @principal=@principal;`
 
 	tflog.Debug(ctx, fmt.Sprintf("Removing Principal %s from server role %s", principal, role))
 	_, err := m.conn.ExecContext(ctx, cmd,
@@ -553,19 +705,44 @@ func (m *client) RevokeDatabasePermission(ctx context.Context, database string, 
 	if err != nil {
 		return err
 	}
+	if err := validateIdentifier("database", database); err != nil {
+		return err
+	}
 	principal, err = normalizePrincipalName(principal)
 	if err != nil {
 		return err
 	}
 
-	conn, err := m.getConnForDatabase(database)
+	conn, exists, err := m.getConnForExistingDatabase(ctx, database)
 	if err != nil {
 		return err
 	}
+	if !exists {
+		// Database is already gone; permission is effectively absent.
+		return nil
+	}
 
 	cmd := `DECLARE @sql NVARCHAR(max);
-SET @sql = N'REVOKE ' + @p1 + N' FROM ' + QUOTENAME(@p2) + N' CASCADE;';
-EXEC (@sql);`
+SET @sql = N'
+IF EXISTS (
+	SELECT 1
+	FROM sys.database_permissions AS sdp
+	JOIN sys.database_principals AS dp ON sdp.grantee_principal_id = dp.principal_id
+	WHERE sdp.[class] = 0
+	  AND sdp.[state] IN (''G'', ''W'')
+	  AND dp.[name] = @principal
+	  AND sdp.[permission_name] = @permission
+)
+BEGIN
+	DECLARE @revoke NVARCHAR(max);
+	SET @revoke = N''REVOKE '' + @permission + N'' FROM '' + QUOTENAME(@principal) + N'' CASCADE;'';
+	EXEC (@revoke);
+END';
+EXEC sp_executesql
+	@sql,
+	N'@principal sysname, @permission nvarchar(128)',
+	@principal = @p2,
+	@permission = @p1;`
 
 	tflog.Debug(ctx, fmt.Sprintf("Revoking permission %s from user %s", perm, principal))
 
@@ -752,9 +929,17 @@ func (m *client) GrantPermission(ctx context.Context, grant GrantPermission) (Gr
 }
 
 func (m *client) RevokePermission(ctx context.Context, grant GrantPermission) error {
-	conn, err := m.getConnForDatabase(grant.Database)
+	if err := validateIdentifier("database", grant.Database); err != nil {
+		return err
+	}
+
+	conn, exists, err := m.getConnForExistingDatabase(ctx, grant.Database)
 	if err != nil {
 		return err
+	}
+	if !exists {
+		// Database is already gone; permission is effectively absent.
+		return nil
 	}
 
 	perm, err := normalizeDatabasePermission(grant.Permission)
@@ -793,15 +978,29 @@ func (m *client) RevokePermission(ctx context.Context, grant GrantPermission) er
 
 		var cmdBuilder strings.Builder
 		cmdBuilder.WriteString("DECLARE @sql NVARCHAR(max);\n")
-		cmdBuilder.WriteString("SET @sql = 'REVOKE ' + @permission + ' ON ' + @class + '::' + ")
-		if objSchema != "" {
-			cmdBuilder.WriteString("QUOTENAME(@object_schema) + '.' + QUOTENAME(@object_name)")
-			args = append(args, sql.Named("object_schema", objSchema))
-		} else {
-			cmdBuilder.WriteString("QUOTENAME(@object_name)")
-		}
-		cmdBuilder.WriteString(" + ' FROM ' + QUOTENAME(@principal) + ' CASCADE';")
-		cmdBuilder.WriteString("\nEXEC (@sql);")
+		cmdBuilder.WriteString("SET @sql = N'\n")
+		cmdBuilder.WriteString("IF EXISTS (\n")
+		cmdBuilder.WriteString("  SELECT 1\n")
+		cmdBuilder.WriteString("  FROM sys.database_permissions AS sdp\n")
+		cmdBuilder.WriteString("  JOIN sys.database_principals AS dp ON sdp.grantee_principal_id = dp.principal_id\n")
+		cmdBuilder.WriteString("  WHERE sdp.[state] IN (''G'', ''W'')\n")
+		cmdBuilder.WriteString("    AND dp.[name] = @principal\n")
+		cmdBuilder.WriteString("    AND sdp.[permission_name] = @permission\n")
+		cmdBuilder.WriteString("    AND (\n")
+		cmdBuilder.WriteString("      (sdp.[class] = 1 AND OBJECT_NAME(sdp.[major_id]) = @object_name AND (@object_schema = '''' OR OBJECT_SCHEMA_NAME(sdp.[major_id]) = @object_schema))\n")
+		cmdBuilder.WriteString("      OR (sdp.[class] = 3 AND SCHEMA_NAME(sdp.[major_id]) = @object_name)\n")
+		cmdBuilder.WriteString("    )\n")
+		cmdBuilder.WriteString(")\n")
+		cmdBuilder.WriteString("BEGIN\n")
+		cmdBuilder.WriteString("  DECLARE @object_ref NVARCHAR(517);\n")
+		cmdBuilder.WriteString("  DECLARE @revoke NVARCHAR(max);\n")
+		cmdBuilder.WriteString("  SET @object_ref = CASE WHEN @object_schema = '''' THEN QUOTENAME(@object_name) ELSE QUOTENAME(@object_schema) + ''.'' + QUOTENAME(@object_name) END;\n")
+		cmdBuilder.WriteString("  SET @revoke = N''REVOKE '' + @permission + N'' ON '' + @class + N''::'' + @object_ref + N'' FROM '' + QUOTENAME(@principal) + N'' CASCADE'';\n")
+		cmdBuilder.WriteString("  EXEC (@revoke);\n")
+		cmdBuilder.WriteString("END';\n")
+		cmdBuilder.WriteString("EXEC sp_executesql @sql, N'@principal sysname, @permission nvarchar(128), @class nvarchar(16), @object_name sysname, @object_schema sysname', @principal=@principal, @permission=@permission, @class=@class, @object_name=@object_name, @object_schema=@object_schema;")
+
+		args = append(args, sql.Named("object_schema", objSchema))
 		args = append(args,
 			sql.Named("permission", grant.Permission),
 			sql.Named("class", securableClass),
@@ -810,7 +1009,23 @@ func (m *client) RevokePermission(ctx context.Context, grant GrantPermission) er
 		)
 		query = cmdBuilder.String()
 	} else {
-		query = "DECLARE @sql NVARCHAR(max);\nSET @sql = 'REVOKE ' + @permission + ' FROM ' + QUOTENAME(@principal) + ' CASCADE';\nEXEC (@sql);"
+		query = `DECLARE @sql NVARCHAR(max);
+SET @sql = N'
+IF EXISTS (
+	SELECT 1
+	FROM sys.database_permissions AS sdp
+	JOIN sys.database_principals AS dp ON sdp.grantee_principal_id = dp.principal_id
+	WHERE sdp.[class] = 0
+	  AND sdp.[state] IN (''G'', ''W'')
+	  AND dp.[name] = @principal
+	  AND sdp.[permission_name] = @permission
+)
+BEGIN
+	DECLARE @revoke NVARCHAR(max);
+	SET @revoke = N''REVOKE '' + @permission + N'' FROM '' + QUOTENAME(@principal) + N'' CASCADE'';
+	EXEC (@revoke);
+END';
+EXEC sp_executesql @sql, N'@principal sysname, @permission nvarchar(128)', @principal=@principal, @permission=@permission;`
 		args = append(args,
 			sql.Named("permission", grant.Permission),
 			sql.Named("principal", grant.Principal),
@@ -929,13 +1144,21 @@ func (m *client) GetRole(ctx context.Context, database string, name string) (Rol
 
 func (m *client) CreateRole(ctx context.Context, database string, name string) (Role, error) {
 	var role Role
+	if err := validateIdentifier("database", database); err != nil {
+		return role, err
+	}
+	if err := validateIdentifier("role", name); err != nil {
+		return role, err
+	}
 	conn, err := m.getConnForDatabase(database)
 	if err != nil {
 		return role, err
 	}
 
 	query := fmt.Sprintf("CREATE ROLE [%s]", name)
-	_, _ = conn.ExecContext(ctx, query)
+	if _, err := conn.ExecContext(ctx, query); err != nil {
+		return role, err
+	}
 
 	role, err = m.GetRole(ctx, database, name)
 	return role, err
@@ -949,14 +1172,27 @@ func (m *client) UpdateRole(ctx context.Context, database string, role Role) (Ro
 }
 
 func (m *client) DeleteRole(ctx context.Context, database string, name string) error {
-	conn, err := m.getConnForDatabase(database)
-	if err != nil {
+	if err := validateIdentifier("database", database); err != nil {
+		return err
+	}
+	if err := validateIdentifier("role", name); err != nil {
 		return err
 	}
 
-	query := fmt.Sprintf("DROP ROLE %s", name)
+	conn, exists, err := m.getConnForExistingDatabase(ctx, database)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		// Database is already gone; role is effectively absent.
+		return nil
+	}
+
+	query := `DECLARE @sql NVARCHAR(max);
+SET @sql = 'IF EXISTS (SELECT 1 FROM [sys].[database_principals] WHERE [type] = ''R'' AND [name] = ' + QUOTENAME(@role, '''') + ') DROP ROLE ' + QUOTENAME(@role);
+EXEC (@sql);`
 	tflog.Debug(ctx, fmt.Sprintf("Deleting Role %s: cmd: %s", name, query))
-	_, err = conn.ExecContext(ctx, query)
+	_, err = conn.ExecContext(ctx, query, sql.Named("role", name))
 
 	return err
 }
@@ -981,6 +1217,9 @@ func (m *client) GetDatabaseById(ctx context.Context, id int64) (Database, error
 
 func (m *client) CreateDatabase(ctx context.Context, name string) (Database, error) {
 	var db Database
+	if err := validateIdentifier("database", name); err != nil {
+		return db, err
+	}
 	query := fmt.Sprintf("CREATE DATABASE [%s]", name)
 	_, err := m.conn.ExecContext(ctx, query)
 	if err != nil {
@@ -1050,11 +1289,12 @@ func (m *client) GetLogin(ctx context.Context, name string) (Login, error) {
 		p.[name] AS name,
 		COALESCE(l.[default_database_name], 'master') AS default_database,
 		COALESCE(l.[default_language_name], '') AS default_language,
-		p.[is_disabled] AS is_disabled,
+		COALESCE(l.[is_disabled], 0) AS is_disabled,
 		COALESCE(CONVERT(varchar(256), p.[sid], 1), '') AS sid
 	FROM sys.server_principals p
-	LEFT JOIN sys.sql_logins l ON p.principal_id = l.principal_id
-	WHERE p.[name] = @name AND p.[type] IN ('S', 'U', 'G')`
+	LEFT JOIN sys.sql_logins l ON p.[sid] = l.[sid]
+	WHERE p.[name] = @name
+	  AND p.[type] IN ('S', 'U', 'G', 'E', 'X')`
 
 	tflog.Debug(ctx, fmt.Sprintf("Executing query for login %s: %s", name, cmd))
 	result := m.conn.QueryRowContext(ctx, cmd, sql.Named("name", name))
@@ -1068,6 +1308,14 @@ func (m *client) GetLogin(ctx context.Context, name string) (Login, error) {
 	login.Sid = strings.ToLower(strings.TrimSpace(login.Sid))
 
 	return login, nil
+}
+
+func isDefaultDatabaseUnsupportedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "default_database") && strings.Contains(msg, "not supported")
 }
 
 func (m *client) CreateLogin(ctx context.Context, create CreateLogin) (Login, error) {
@@ -1095,36 +1343,48 @@ func (m *client) CreateLogin(ctx context.Context, create CreateLogin) (Login, er
 		}
 	}
 
-	// Build the CREATE LOGIN command using dynamic SQL for safety.
-	var cmdBuilder strings.Builder
-	var args []any
+	buildCreateLoginCommand := func(includeDefaultDatabase bool) (string, []any) {
+		var cmdBuilder strings.Builder
+		var args []any
 
-	cmdBuilder.WriteString("DECLARE @sql NVARCHAR(max);\n")
-	cmdBuilder.WriteString("SET @sql = 'CREATE LOGIN ' + QUOTENAME(@name) + ' WITH PASSWORD = ' + QUOTENAME(@password, '''')")
-	args = append(args, sql.Named("name", create.Name))
-	args = append(args, sql.Named("password", create.Password))
+		cmdBuilder.WriteString("DECLARE @sql NVARCHAR(max);\n")
+		cmdBuilder.WriteString("SET @sql = 'CREATE LOGIN ' + QUOTENAME(@name) + ' WITH PASSWORD = ' + QUOTENAME(@password, '''')")
+		args = append(args, sql.Named("name", create.Name))
+		args = append(args, sql.Named("password", create.Password))
 
-	if create.DefaultDatabase != "" {
-		cmdBuilder.WriteString(" + ', DEFAULT_DATABASE = ' + QUOTENAME(@default_database)")
-		args = append(args, sql.Named("default_database", create.DefaultDatabase))
+		if includeDefaultDatabase && create.DefaultDatabase != "" {
+			cmdBuilder.WriteString(" + ', DEFAULT_DATABASE = ' + QUOTENAME(@default_database)")
+			args = append(args, sql.Named("default_database", create.DefaultDatabase))
+		}
+		if create.DefaultLanguage != "" {
+			cmdBuilder.WriteString(" + ', DEFAULT_LANGUAGE = ' + QUOTENAME(@default_language)")
+			args = append(args, sql.Named("default_language", create.DefaultLanguage))
+		}
+		if create.Sid != "" {
+			cmdBuilder.WriteString(" + ', SID = ' + @sid")
+			args = append(args, sql.Named("sid", create.Sid))
+		}
+
+		cmdBuilder.WriteString(";\n")
+		cmdBuilder.WriteString("EXEC (@sql);")
+		return cmdBuilder.String(), args
 	}
-	if create.DefaultLanguage != "" {
-		cmdBuilder.WriteString(" + ', DEFAULT_LANGUAGE = ' + QUOTENAME(@default_language)")
-		args = append(args, sql.Named("default_language", create.DefaultLanguage))
-	}
-	if create.Sid != "" {
-		cmdBuilder.WriteString(" + ', SID = ' + @sid")
-		args = append(args, sql.Named("sid", create.Sid))
-	}
 
-	cmdBuilder.WriteString(";\n")
-	cmdBuilder.WriteString("EXEC (@sql);")
-
-	cmd := cmdBuilder.String()
+	cmd, args := buildCreateLoginCommand(true)
 	tflog.Debug(ctx, fmt.Sprintf("Creating login %s: %s", create.Name, cmd))
 
 	_, err := m.conn.ExecContext(ctx, cmd, args...)
 	if err != nil {
+		// Azure SQL rejects DEFAULT_DATABASE for SQL logins.
+		// Retry without DEFAULT_DATABASE only when requested target is master.
+		if strings.EqualFold(create.DefaultDatabase, "master") && isDefaultDatabaseUnsupportedError(err) {
+			retryCmd, retryArgs := buildCreateLoginCommand(false)
+			tflog.Debug(ctx, fmt.Sprintf("Retrying login create without DEFAULT_DATABASE for %s", create.Name))
+			if _, retryErr := m.conn.ExecContext(ctx, retryCmd, retryArgs...); retryErr != nil {
+				return login, fmt.Errorf("failed to create login: %v (fallback without DEFAULT_DATABASE also failed: %v)", err, retryErr)
+			}
+			return m.GetLogin(ctx, create.Name)
+		}
 		return login, fmt.Errorf("failed to create login: %v", err)
 	}
 
@@ -1146,50 +1406,67 @@ func (m *client) UpdateLogin(ctx context.Context, update UpdateLogin) (Login, er
 		}
 	}
 
-	var cmdBuilder strings.Builder
-	var args []any
+	buildUpdateLoginCommand := func(updateReq UpdateLogin, includeDefaultDatabase bool) (string, []any, bool) {
+		var cmdBuilder strings.Builder
+		var args []any
 
-	cmdBuilder.WriteString("DECLARE @sql NVARCHAR(max);\n")
-	cmdBuilder.WriteString("SET @sql = 'ALTER LOGIN ' + QUOTENAME(@name)")
-	args = append(args, sql.Named("name", update.Name))
+		cmdBuilder.WriteString("DECLARE @sql NVARCHAR(max);\n")
+		cmdBuilder.WriteString("SET @sql = 'ALTER LOGIN ' + QUOTENAME(@name)")
+		args = append(args, sql.Named("name", updateReq.Name))
 
-	hasChanges := false
+		hasChanges := false
 
-	if update.Password != "" {
-		cmdBuilder.WriteString(" + ' WITH PASSWORD = ' + QUOTENAME(@password, '''')")
-		args = append(args, sql.Named("password", update.Password))
-		hasChanges = true
-	}
-
-	if update.DefaultDatabase != "" {
-		if hasChanges {
-			cmdBuilder.WriteString(" + ', DEFAULT_DATABASE = ' + QUOTENAME(@default_database)")
-		} else {
-			cmdBuilder.WriteString(" + ' WITH DEFAULT_DATABASE = ' + QUOTENAME(@default_database)")
+		if updateReq.Password != "" {
+			cmdBuilder.WriteString(" + ' WITH PASSWORD = ' + QUOTENAME(@password, '''')")
+			args = append(args, sql.Named("password", updateReq.Password))
+			hasChanges = true
 		}
-		args = append(args, sql.Named("default_database", update.DefaultDatabase))
-		hasChanges = true
-	}
 
-	if update.DefaultLanguage != "" {
-		if hasChanges {
-			cmdBuilder.WriteString(" + ', DEFAULT_LANGUAGE = ' + QUOTENAME(@default_language)")
-		} else {
-			cmdBuilder.WriteString(" + ' WITH DEFAULT_LANGUAGE = ' + QUOTENAME(@default_language)")
+		if includeDefaultDatabase && updateReq.DefaultDatabase != "" {
+			if hasChanges {
+				cmdBuilder.WriteString(" + ', DEFAULT_DATABASE = ' + QUOTENAME(@default_database)")
+			} else {
+				cmdBuilder.WriteString(" + ' WITH DEFAULT_DATABASE = ' + QUOTENAME(@default_database)")
+			}
+			args = append(args, sql.Named("default_database", updateReq.DefaultDatabase))
+			hasChanges = true
 		}
-		args = append(args, sql.Named("default_language", update.DefaultLanguage))
-		hasChanges = true
+
+		if updateReq.DefaultLanguage != "" {
+			if hasChanges {
+				cmdBuilder.WriteString(" + ', DEFAULT_LANGUAGE = ' + QUOTENAME(@default_language)")
+			} else {
+				cmdBuilder.WriteString(" + ' WITH DEFAULT_LANGUAGE = ' + QUOTENAME(@default_language)")
+			}
+			args = append(args, sql.Named("default_language", updateReq.DefaultLanguage))
+			hasChanges = true
+		}
+
+		if hasChanges {
+			cmdBuilder.WriteString(";\n")
+			cmdBuilder.WriteString("EXEC (@sql);")
+		}
+
+		return cmdBuilder.String(), args, hasChanges
 	}
 
+	cmd, args, hasChanges := buildUpdateLoginCommand(update, true)
 	if hasChanges {
-		cmdBuilder.WriteString(";\n")
-		cmdBuilder.WriteString("EXEC (@sql);")
-
-		cmd := cmdBuilder.String()
 		tflog.Debug(ctx, fmt.Sprintf("Updating login %s: %s", update.Name, cmd))
-
 		if _, err := m.conn.ExecContext(ctx, cmd, args...); err != nil {
-			return Login{}, fmt.Errorf("failed to update login: %v", err)
+			// Azure SQL rejects DEFAULT_DATABASE for SQL logins.
+			// Retry without DEFAULT_DATABASE only when requested target is master.
+			if strings.EqualFold(update.DefaultDatabase, "master") && isDefaultDatabaseUnsupportedError(err) {
+				retryCmd, retryArgs, retryHasChanges := buildUpdateLoginCommand(update, false)
+				if retryHasChanges {
+					tflog.Debug(ctx, fmt.Sprintf("Retrying login update without DEFAULT_DATABASE for %s", update.Name))
+					if _, retryErr := m.conn.ExecContext(ctx, retryCmd, retryArgs...); retryErr != nil {
+						return Login{}, fmt.Errorf("failed to update login: %v (fallback without DEFAULT_DATABASE also failed: %v)", err, retryErr)
+					}
+				}
+			} else {
+				return Login{}, fmt.Errorf("failed to update login: %v", err)
+			}
 		}
 	}
 
@@ -1202,7 +1479,7 @@ func (m *client) DeleteLogin(ctx context.Context, name string) error {
 	}
 
 	cmd := `DECLARE @sql NVARCHAR(max);
-SET @sql = 'IF EXISTS (SELECT 1 FROM sys.server_principals WHERE [name] = ' + QUOTENAME(@name, '''') + ' AND [type] IN (''S'', ''U'', ''G'')) DROP LOGIN ' + QUOTENAME(@name);
+SET @sql = 'IF EXISTS (SELECT 1 FROM [sys].[server_principals] WHERE [name] = ' + QUOTENAME(@name, '''') + ' AND [type] IN (''S'', ''U'', ''G'', ''E'', ''X'')) DROP LOGIN ' + QUOTENAME(@name);
 EXEC (@sql);`
 
 	tflog.Debug(ctx, fmt.Sprintf("Deleting login %s: %s", name, cmd))

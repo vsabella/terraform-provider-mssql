@@ -341,3 +341,373 @@ func Test_CreateLogin_WithSid(t *testing.T) {
 		t.Fatalf("unmet sqlmock expectations: %v", err)
 	}
 }
+
+func Test_GetUser_LoginNameFallbackFromSqlLogins(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to open sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	c := &client{
+		conn:     db,
+		database: "permdb1",
+	}
+
+	rows := sqlmock.NewRows([]string{"id", "sid", "name", "type", "ext", "default_schema_name", "sid_bytes"}).
+		AddRow("tools-user", "0x01", "tools-user", "S", false, "tools", []byte{0x01})
+
+	mock.ExpectQuery("FROM sys\\.database_principals").
+		WithArgs(sql.Named("username", "tools-user")).
+		WillReturnRows(rows)
+
+	mock.ExpectQuery("FROM sys\\.server_principals").
+		WithArgs(sql.Named("sid", []byte{0x01})).
+		WillReturnRows(sqlmock.NewRows([]string{"name"}))
+
+	mock.ExpectQuery("FROM sys\\.sql_logins").
+		WithArgs(sql.Named("sid", []byte{0x01})).
+		WillReturnRows(sqlmock.NewRows([]string{"name"}).AddRow("tools-user"))
+
+	user, err := c.GetUser(context.Background(), "permdb1", "tools-user")
+	if err != nil {
+		t.Fatalf("GetUser() error = %v", err)
+	}
+	if user.LoginName != "tools-user" {
+		t.Fatalf("GetUser() login_name = %q, want %q", user.LoginName, "tools-user")
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sqlmock expectations: %v", err)
+	}
+}
+
+func Test_GetUser_LoginNameFromServerPrincipals(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to open sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	c := &client{
+		conn:     db,
+		database: "appdb",
+	}
+
+	rows := sqlmock.NewRows([]string{"id", "sid", "name", "type", "ext", "default_schema_name", "sid_bytes"}).
+		AddRow("app-user", "0x02", "app-user", "S", false, "dbo", []byte{0x02})
+
+	mock.ExpectQuery("FROM sys\\.database_principals").
+		WithArgs(sql.Named("username", "app-user")).
+		WillReturnRows(rows)
+
+	mock.ExpectQuery("FROM sys\\.server_principals").
+		WithArgs(sql.Named("sid", []byte{0x02})).
+		WillReturnRows(sqlmock.NewRows([]string{"name"}).AddRow("app-login"))
+
+	user, err := c.GetUser(context.Background(), "appdb", "app-user")
+	if err != nil {
+		t.Fatalf("GetUser() error = %v", err)
+	}
+	if user.LoginName != "app-login" {
+		t.Fatalf("GetUser() login_name = %q, want %q", user.LoginName, "app-login")
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sqlmock expectations: %v", err)
+	}
+}
+
+func Test_GetUser_MissingSqlLoginsView_NoError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to open sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	c := &client{
+		conn:     db,
+		database: "permdb1",
+	}
+
+	rows := sqlmock.NewRows([]string{"id", "sid", "name", "type", "ext", "default_schema_name", "sid_bytes"}).
+		AddRow("tools-user", "0x01", "tools-user", "S", false, "tools", []byte{0x01})
+
+	mock.ExpectQuery("FROM sys\\.database_principals").
+		WithArgs(sql.Named("username", "tools-user")).
+		WillReturnRows(rows)
+
+	mock.ExpectQuery("FROM sys\\.server_principals").
+		WithArgs(sql.Named("sid", []byte{0x01})).
+		WillReturnRows(sqlmock.NewRows([]string{"name"}))
+
+	mock.ExpectQuery("FROM sys\\.sql_logins").
+		WithArgs(sql.Named("sid", []byte{0x01})).
+		WillReturnError(fmt.Errorf("mssql: Invalid object name 'sys.sql_logins'."))
+
+	user, err := c.GetUser(context.Background(), "permdb1", "tools-user")
+	if err != nil {
+		t.Fatalf("GetUser() error = %v", err)
+	}
+	if user.LoginName != "" {
+		t.Fatalf("GetUser() login_name = %q, want empty string", user.LoginName)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sqlmock expectations: %v", err)
+	}
+}
+
+func Test_CreateLogin_MasterDefaultDatabaseFallback(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to open sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	c := &client{conn: db}
+	create := CreateLogin{
+		Name:            "test_login",
+		Password:        "Password123!",
+		DefaultDatabase: "master",
+	}
+
+	mock.ExpectExec("CREATE LOGIN").
+		WithArgs(
+			sql.Named("name", create.Name),
+			sql.Named("password", create.Password),
+			sql.Named("default_database", create.DefaultDatabase),
+		).
+		WillReturnError(fmt.Errorf("mssql: Keyword or statement option 'default_database' is not supported in this version of SQL Server."))
+
+	mock.ExpectExec("CREATE LOGIN").
+		WithArgs(
+			sql.Named("name", create.Name),
+			sql.Named("password", create.Password),
+		).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	rows := sqlmock.NewRows([]string{"name", "default_database", "default_language", "is_disabled", "sid"}).
+		AddRow(create.Name, "master", "", false, "")
+	mock.ExpectQuery("FROM sys.server_principals").
+		WithArgs(sql.Named("name", create.Name)).
+		WillReturnRows(rows)
+
+	login, err := c.CreateLogin(context.Background(), create)
+	if err != nil {
+		t.Fatalf("CreateLogin() error = %v", err)
+	}
+	if login.Name != create.Name {
+		t.Fatalf("CreateLogin() name = %s, want %s", login.Name, create.Name)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sqlmock expectations: %v", err)
+	}
+}
+
+func Test_UpdateLogin_DefaultDatabaseMaster(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to open sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	c := &client{conn: db}
+	update := UpdateLogin{
+		Name:            "test_login",
+		DefaultDatabase: "master",
+	}
+
+	mock.ExpectExec("ALTER LOGIN").
+		WithArgs(
+			sql.Named("name", update.Name),
+			sql.Named("default_database", update.DefaultDatabase),
+		).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	rows := sqlmock.NewRows([]string{"name", "default_database", "default_language", "is_disabled", "sid"}).
+		AddRow(update.Name, "master", "", false, "")
+	mock.ExpectQuery("FROM sys.server_principals").
+		WithArgs(sql.Named("name", update.Name)).
+		WillReturnRows(rows)
+
+	login, err := c.UpdateLogin(context.Background(), update)
+	if err != nil {
+		t.Fatalf("UpdateLogin() error = %v", err)
+	}
+	if login.DefaultDatabase != "master" {
+		t.Fatalf("UpdateLogin() default_database = %s, want master", login.DefaultDatabase)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sqlmock expectations: %v", err)
+	}
+}
+
+func Test_UpdateLogin_DefaultDatabaseMasterFallback(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to open sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	c := &client{conn: db}
+	update := UpdateLogin{
+		Name:            "test_login",
+		DefaultDatabase: "master",
+	}
+
+	mock.ExpectExec("ALTER LOGIN").
+		WithArgs(
+			sql.Named("name", update.Name),
+			sql.Named("default_database", update.DefaultDatabase),
+		).
+		WillReturnError(fmt.Errorf("mssql: Keyword or statement option 'default_database' is not supported in this version of SQL Server."))
+
+	rows := sqlmock.NewRows([]string{"name", "default_database", "default_language", "is_disabled", "sid"}).
+		AddRow(update.Name, "master", "", false, "")
+	mock.ExpectQuery("FROM sys.server_principals").
+		WithArgs(sql.Named("name", update.Name)).
+		WillReturnRows(rows)
+
+	login, err := c.UpdateLogin(context.Background(), update)
+	if err != nil {
+		t.Fatalf("UpdateLogin() error = %v", err)
+	}
+	if login.DefaultDatabase != "master" {
+		t.Fatalf("UpdateLogin() default_database = %s, want master", login.DefaultDatabase)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sqlmock expectations: %v", err)
+	}
+}
+
+func Test_DeleteRole_DatabaseMissing_NoOp(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to open sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	c := &client{conn: db, database: "master", connByDatabase: map[string]*sql.DB{}}
+
+	mock.ExpectQuery("SELECT 1 FROM sys\\.databases WHERE \\[name\\] = @name").
+		WithArgs(sql.Named("name", "missingdb")).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}))
+
+	if err := c.DeleteRole(context.Background(), "missingdb", "db_executor"); err != nil {
+		t.Fatalf("DeleteRole() unexpected error = %v", err)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sqlmock expectations: %v", err)
+	}
+}
+
+func Test_DeleteUser_DatabaseMissing_NoOp(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to open sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	c := &client{conn: db, database: "master", connByDatabase: map[string]*sql.DB{}}
+
+	mock.ExpectQuery("SELECT 1 FROM sys\\.databases WHERE \\[name\\] = @name").
+		WithArgs(sql.Named("name", "missingdb")).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}))
+
+	if err := c.DeleteUser(context.Background(), "missingdb", "app_user"); err != nil {
+		t.Fatalf("DeleteUser() unexpected error = %v", err)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sqlmock expectations: %v", err)
+	}
+}
+
+func Test_RevokePermission_DatabaseMissing_NoOp(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to open sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	c := &client{conn: db, database: "master", connByDatabase: map[string]*sql.DB{}}
+
+	mock.ExpectQuery("SELECT 1 FROM sys\\.databases WHERE \\[name\\] = @name").
+		WithArgs(sql.Named("name", "missingdb")).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}))
+
+	if err := c.RevokePermission(context.Background(), GrantPermission{
+		Database:   "missingdb",
+		Principal:  "db_executor",
+		Permission: "EXECUTE",
+	}); err != nil {
+		t.Fatalf("RevokePermission() unexpected error = %v", err)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sqlmock expectations: %v", err)
+	}
+}
+
+func Test_RevokePermission_DatabasePermission_ConditionalRevoke(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to open sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	c := &client{conn: db, database: "permdb1", connByDatabase: map[string]*sql.DB{"permdb1": db}}
+
+	mock.ExpectQuery("SELECT 1 FROM sys\\.databases WHERE \\[name\\] = @name").
+		WithArgs(sql.Named("name", "permdb1")).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(1))
+
+	mock.ExpectExec("IF EXISTS").
+		WithArgs(
+			sql.Named("permission", "EXECUTE"),
+			sql.Named("principal", "db_executor"),
+		).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	if err := c.RevokePermission(context.Background(), GrantPermission{
+		Database:   "permdb1",
+		Principal:  "db_executor",
+		Permission: "execute",
+	}); err != nil {
+		t.Fatalf("RevokePermission() unexpected error = %v", err)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sqlmock expectations: %v", err)
+	}
+}
+
+func Test_UnassignServerRole_ConditionalNoOp(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to open sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	c := &client{conn: db, database: "master", connByDatabase: map[string]*sql.DB{"master": db}}
+
+	mock.ExpectExec("IF EXISTS").
+		WithArgs(
+			sql.Named("role", "##MS_ServerStateReader##"),
+			sql.Named("principal", "telemetry-user"),
+		).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	if err := c.UnassignServerRole(context.Background(), "##MS_ServerStateReader##", "telemetry-user"); err != nil {
+		t.Fatalf("UnassignServerRole() unexpected error = %v", err)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sqlmock expectations: %v", err)
+	}
+}

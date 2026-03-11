@@ -101,23 +101,19 @@ resource "mssql_script" "first_responder_kit" {
 }
 
 func (r *MssqlScriptResource) Configure(ctx context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
-	if req.ProviderData == nil {
-		return
-	}
-	client, ok := req.ProviderData.(*core.ProviderData)
-
+	client, ok := configureResourceProviderData("mssql_script", req.ProviderData, &resp.Diagnostics)
 	if !ok {
-		resp.Diagnostics.AddError(
-			"Unexpected Resource Configure Type",
-			fmt.Sprintf("Expected *core.ProviderData, got: %T. Please report this issue to the provider developers.", req.ProviderData),
-		)
 		return
 	}
 
-	r.ctx = *client
+	r.ctx = client
 }
 
 func (r *MssqlScriptResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+	if !ensureProviderReady("mssql_script", r.ctx, &resp.Diagnostics) {
+		return
+	}
+
 	var data MssqlScriptResourceModel
 
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
@@ -146,11 +142,26 @@ func (r *MssqlScriptResource) Create(ctx context.Context, req resource.CreateReq
 }
 
 func (r *MssqlScriptResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+	if !ensureProviderReady("mssql_script", r.ctx, &resp.Diagnostics) {
+		return
+	}
+
 	var data MssqlScriptResourceModel
 
 	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
 	if resp.Diagnostics.HasError() {
 		return
+	}
+
+	if !data.Id.IsNull() && !data.Id.IsUnknown() && data.Id.ValueString() != "" {
+		idServerID, _, _, err := parseScriptId(data.Id.ValueString())
+		if err != nil {
+			resp.Diagnostics.AddError("Invalid script ID", err.Error())
+			return
+		}
+		if !ensureServerIDMatch("mssql_script", idServerID, r.ctx.ServerID, &resp.Diagnostics) {
+			return
+		}
 	}
 
 	// We don't query the database to check if the script objects exist.
@@ -160,12 +171,26 @@ func (r *MssqlScriptResource) Read(ctx context.Context, req resource.ReadRequest
 }
 
 func (r *MssqlScriptResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	if !ensureProviderReady("mssql_script", r.ctx, &resp.Diagnostics) {
+		return
+	}
+
 	var plan, state MssqlScriptResourceModel
 
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
+	}
+	if !state.Id.IsNull() && !state.Id.IsUnknown() && state.Id.ValueString() != "" {
+		idServerID, _, _, err := parseScriptId(state.Id.ValueString())
+		if err != nil {
+			resp.Diagnostics.AddError("Invalid script ID", err.Error())
+			return
+		}
+		if !ensureServerIDMatch("mssql_script", idServerID, r.ctx.ServerID, &resp.Diagnostics) {
+			return
+		}
 	}
 
 	// Re-execute on version change (in-place).
@@ -199,11 +224,25 @@ func (r *MssqlScriptResource) Update(ctx context.Context, req resource.UpdateReq
 }
 
 func (r *MssqlScriptResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+	if !ensureProviderReady("mssql_script", r.ctx, &resp.Diagnostics) {
+		return
+	}
+
 	var data MssqlScriptResourceModel
 
 	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
 	if resp.Diagnostics.HasError() {
 		return
+	}
+	if !data.Id.IsNull() && !data.Id.IsUnknown() && data.Id.ValueString() != "" {
+		idServerID, _, _, err := parseScriptId(data.Id.ValueString())
+		if err != nil {
+			resp.Diagnostics.AddError("Invalid script ID", err.Error())
+			return
+		}
+		if !ensureServerIDMatch("mssql_script", idServerID, r.ctx.ServerID, &resp.Diagnostics) {
+			return
+		}
 	}
 
 	// Execute delete script if provided
@@ -224,10 +263,17 @@ func (r *MssqlScriptResource) Delete(ctx context.Context, req resource.DeleteReq
 }
 
 func (r *MssqlScriptResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+	if !ensureProviderReady("mssql_script", r.ctx, &resp.Diagnostics) {
+		return
+	}
+
 	// Import ID must be <server_id>/<database>/<name>
-	database, name, err := parseScriptId(req.ID)
+	idServerID, database, name, err := parseScriptId(req.ID)
 	if err != nil {
 		resp.Diagnostics.AddError("Invalid import ID", err.Error())
+		return
+	}
+	if !ensureServerIDMatch("mssql_script", idServerID, r.ctx.ServerID, &resp.Diagnostics) {
 		return
 	}
 
@@ -236,18 +282,22 @@ func (r *MssqlScriptResource) ImportState(ctx context.Context, req resource.Impo
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), fmt.Sprintf("%s/%s/%s", r.ctx.ServerID, database, name))...)
 }
 
-func parseScriptId(id string) (string, string, error) {
+func parseScriptId(id string) (string, string, string, error) {
 	parts := strings.Split(id, "/")
 	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
-		return "", "", fmt.Errorf("expected id in format <server_id>/<database>/<name>, got %q", id)
+		return "", "", "", fmt.Errorf("expected id in format <server_id>/<database>/<name>, got %q", id)
+	}
+	serverID, err := url.QueryUnescape(parts[0])
+	if err != nil {
+		return "", "", "", err
 	}
 	db, err := url.QueryUnescape(parts[1])
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	name, err := url.QueryUnescape(parts[2])
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
-	return db, name, nil
+	return serverID, db, name, nil
 }

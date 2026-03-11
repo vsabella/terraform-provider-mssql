@@ -37,6 +37,7 @@ type SqlAuth struct {
 }
 
 type MssqlProviderModel struct {
+	Enabled  types.Bool   `tfsdk:"enabled"`
 	Host     types.String `tfsdk:"host"`
 	Port     types.Int64  `tfsdk:"port"`
 	Database types.String `tfsdk:"database"`
@@ -51,9 +52,13 @@ func (p *MssqlProvider) Metadata(ctx context.Context, req provider.MetadataReque
 func (p *MssqlProvider) Schema(ctx context.Context, req provider.SchemaRequest, resp *provider.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		Attributes: map[string]schema.Attribute{
+			"enabled": schema.BoolAttribute{
+				MarkdownDescription: "Whether this provider alias is enabled. Set to `false` to intentionally disable the alias without running SQL operations.",
+				Optional:            true,
+			},
 			"host": schema.StringAttribute{
 				MarkdownDescription: "MSSQL Server Hostname",
-				Required:            true,
+				Optional:            true,
 			},
 			"port": schema.Int64Attribute{
 				MarkdownDescription: "MSSQL Server Port. Default: `1433`",
@@ -65,7 +70,7 @@ func (p *MssqlProvider) Schema(ctx context.Context, req provider.SchemaRequest, 
 			},
 			"sql_auth": schema.SingleNestedAttribute{
 				Description: "SQL authentication credentials used when connecting.",
-				Required:    true,
+				Optional:    true,
 				Attributes: map[string]schema.Attribute{
 					"username": schema.StringAttribute{
 						Description: "User name for SQL authentication.",
@@ -87,20 +92,64 @@ func (p *MssqlProvider) Configure(ctx context.Context, req provider.ConfigureReq
 
 	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
 
-	// Configuration values are now available.
-	// if data.Endpoint.IsNull() { /* ... */ }
+	if resp.Diagnostics.HasError() {
+		return
+	}
 
+	if data.Enabled.IsUnknown() {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("enabled"),
+			"Unknown provider enabled flag",
+			"The provider requires a known boolean for `enabled`.",
+		)
+		return
+	}
+
+	enabled := true
+	if !data.Enabled.IsNull() {
+		enabled = data.Enabled.ValueBool()
+	}
+	data.Enabled = types.BoolValue(enabled)
+
+	if !enabled {
+		database := "master"
+		if !data.Database.IsNull() && !data.Database.IsUnknown() && strings.TrimSpace(data.Database.ValueString()) != "" {
+			database = data.Database.ValueString()
+		}
+
+		port := int64(1433)
+		if !data.Port.IsNull() && !data.Port.IsUnknown() && data.Port.ValueInt64() > 0 {
+			port = data.Port.ValueInt64()
+		}
+
+		serverID := ""
+		if !data.Host.IsNull() && !data.Host.IsUnknown() && strings.TrimSpace(data.Host.ValueString()) != "" {
+			serverID = fmt.Sprintf("%s:%d", data.Host.ValueString(), port)
+		}
+
+		disabled := &core.ProviderData{
+			Enabled:       false,
+			DisableReason: "Set enabled = false for this alias.",
+			ServerID:      serverID,
+			Database:      database,
+		}
+		resp.DataSourceData = disabled
+		resp.ResourceData = disabled
+		return
+	}
+
+	hostProvided := !data.Host.IsNull() && !data.Host.IsUnknown() && strings.TrimSpace(data.Host.ValueString()) != ""
 	if data.Host.IsUnknown() {
 		resp.Diagnostics.AddAttributeError(
 			path.Root("host"),
 			"Unknown Sql Server Host",
 			"The provider needs the hostname or IP address of Microsoft SQL Server.",
 		)
-	} else if data.Host.IsNull() || strings.TrimSpace(data.Host.ValueString()) == "" {
+	} else if !hostProvided {
 		resp.Diagnostics.AddAttributeError(
 			path.Root("host"),
 			"Missing Sql Server Host",
-			"`host` must be set to the hostname or IP address of Microsoft SQL Server.",
+			"`host` must be set to the hostname or IP address of Microsoft SQL Server when enabled = true.",
 		)
 	}
 
@@ -112,43 +161,38 @@ func (p *MssqlProvider) Configure(ctx context.Context, req provider.ConfigureReq
 		)
 	}
 
-	if data.Database.IsUnknown() || data.Database.IsNull() || data.Database.ValueString() == "" {
+	if data.SqlAuth == nil {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("sql_auth"),
+			"Missing SQL Authentication",
+			"`sql_auth` is required when enabled = true. Provide `sql_auth { username = \"...\" password = \"...\" }`.",
+		)
+	} else {
+		if data.SqlAuth.Username.IsUnknown() || data.SqlAuth.Username.IsNull() || data.SqlAuth.Username.ValueString() == "" {
+			resp.Diagnostics.AddAttributeError(
+				path.Root("sql_auth").AtName("username"),
+				"Missing SQL Username",
+				"`sql_auth.username` must be set when enabled = true.",
+			)
+		}
+		if data.SqlAuth.Password.IsUnknown() || data.SqlAuth.Password.IsNull() || data.SqlAuth.Password.ValueString() == "" {
+			resp.Diagnostics.AddAttributeError(
+				path.Root("sql_auth").AtName("password"),
+				"Missing SQL Password",
+				"`sql_auth.password` must be set when enabled = true.",
+			)
+		}
+	}
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	if data.Database.IsUnknown() || data.Database.IsNull() || strings.TrimSpace(data.Database.ValueString()) == "" {
 		resp.Diagnostics.AddWarning(
 			"Unknown Sql Server Database, defaults to 'master'",
 			"If not provided, the provider will default to 'master'. Database-scoped resources can target other databases using their `database` attribute.",
 		)
 		data.Database = types.StringValue("master")
-	}
-
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	// Validate sql_auth (required to connect)
-	if data.SqlAuth == nil {
-		resp.Diagnostics.AddAttributeError(
-			path.Root("sql_auth"),
-			"Missing SQL Authentication",
-			"`sql_auth` is required. Provide `sql_auth { username = \"...\" password = \"...\" }`.",
-		)
-		return
-	}
-	if data.SqlAuth.Username.IsUnknown() || data.SqlAuth.Username.IsNull() || data.SqlAuth.Username.ValueString() == "" {
-		resp.Diagnostics.AddAttributeError(
-			path.Root("sql_auth").AtName("username"),
-			"Missing SQL Username",
-			"`sql_auth.username` must be set.",
-		)
-	}
-	if data.SqlAuth.Password.IsUnknown() || data.SqlAuth.Password.IsNull() || data.SqlAuth.Password.ValueString() == "" {
-		resp.Diagnostics.AddAttributeError(
-			path.Root("sql_auth").AtName("password"),
-			"Missing SQL Password",
-			"`sql_auth.password` must be set.",
-		)
-	}
-	if resp.Diagnostics.HasError() {
-		return
 	}
 
 	// Create Client Context
@@ -159,9 +203,11 @@ func (p *MssqlProvider) Configure(ctx context.Context, req provider.ConfigureReq
 	}
 	serverID := fmt.Sprintf("%s:%d", host, port)
 	client := &core.ProviderData{
-		Client:   mssql.NewClient(host, port, data.Database.ValueString(), data.SqlAuth.Username.ValueString(), data.SqlAuth.Password.ValueString()),
-		ServerID: serverID,
-		Database: data.Database.ValueString(),
+		Client:        mssql.NewClient(host, port, data.Database.ValueString(), data.SqlAuth.Username.ValueString(), data.SqlAuth.Password.ValueString()),
+		ServerID:      serverID,
+		Database:      data.Database.ValueString(),
+		Enabled:       true,
+		DisableReason: "",
 	}
 
 	resp.DataSourceData = client

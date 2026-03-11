@@ -41,6 +41,11 @@ type MssqlGrantResourceModel struct {
 	ObjectName types.String `tfsdk:"object_name"`
 }
 
+type decodedGrantID struct {
+	ServerID string
+	Grant    mssql.GrantPermission
+}
+
 func grantToId(serverID string, grant mssql.GrantPermission) string {
 	parts := []string{
 		url.QueryEscape(serverID),
@@ -57,17 +62,17 @@ func grantToId(serverID string, grant mssql.GrantPermission) string {
 	return strings.Join(parts, "/")
 }
 
-func decodeGrantId(id string) (mssql.GrantPermission, error) {
+func decodeGrantId(id string) (decodedGrantID, error) {
 	parts := strings.Split(id, "/")
 	if len(parts) < 4 {
-		return mssql.GrantPermission{}, fmt.Errorf("expected id in format <server_id>/<database>/<principal>/<permission>[/object_type/object_name], got %q", id)
+		return decodedGrantID{}, fmt.Errorf("expected id in format <server_id>/<database>/<principal>/<permission>[/object_type/object_name], got %q", id)
 	}
 
 	switch len(parts) {
 	case 4, 6:
 		// ok
 	default:
-		return mssql.GrantPermission{}, fmt.Errorf("expected id in format <server_id>/<database>/<principal>/<permission>[/object_type/object_name], got %q", id)
+		return decodedGrantID{}, fmt.Errorf("expected id in format <server_id>/<database>/<principal>/<permission>[/object_type/object_name], got %q", id)
 	}
 
 	decode := func(s string) (string, error) {
@@ -76,23 +81,23 @@ func decodeGrantId(id string) (mssql.GrantPermission, error) {
 
 	serverID, err := decode(parts[0])
 	if err != nil {
-		return mssql.GrantPermission{}, err
+		return decodedGrantID{}, err
 	}
 	if serverID == "" {
-		return mssql.GrantPermission{}, fmt.Errorf("expected id in format <server_id>/<database>/<principal>/<permission>[/object_type/object_name], got %q", id)
+		return decodedGrantID{}, fmt.Errorf("expected id in format <server_id>/<database>/<principal>/<permission>[/object_type/object_name], got %q", id)
 	}
 
 	db, err := decode(parts[1])
 	if err != nil {
-		return mssql.GrantPermission{}, err
+		return decodedGrantID{}, err
 	}
 	principal, err := decode(parts[2])
 	if err != nil {
-		return mssql.GrantPermission{}, err
+		return decodedGrantID{}, err
 	}
 	permission, err := decode(parts[3])
 	if err != nil {
-		return mssql.GrantPermission{}, err
+		return decodedGrantID{}, err
 	}
 
 	grant := mssql.GrantPermission{
@@ -104,17 +109,17 @@ func decodeGrantId(id string) (mssql.GrantPermission, error) {
 	if len(parts) == 6 {
 		objectType, err := decode(parts[4])
 		if err != nil {
-			return mssql.GrantPermission{}, err
+			return decodedGrantID{}, err
 		}
 		objectName, err := decode(parts[5])
 		if err != nil {
-			return mssql.GrantPermission{}, err
+			return decodedGrantID{}, err
 		}
 		grant.ObjectType = objectType
 		grant.ObjectName = objectName
 	}
 
-	return grant, nil
+	return decodedGrantID{ServerID: serverID, Grant: grant}, nil
 }
 
 func (r *MssqlGrantResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -209,25 +214,19 @@ resource "mssql_grant" "schema_control" {
 }
 
 func (r *MssqlGrantResource) Configure(ctx context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
-	// Prevent panic if the provider has not been configured.
-	if req.ProviderData == nil {
-		return
-	}
-	client, ok := req.ProviderData.(*core.ProviderData)
-
+	client, ok := configureResourceProviderData("mssql_grant", req.ProviderData, &resp.Diagnostics)
 	if !ok {
-		resp.Diagnostics.AddError(
-			"Unexpected Resource Configure Type",
-			fmt.Sprintf("Expected *core.ProviderData, got: %T. Please report this issue to the provider developers.", req.ProviderData),
-		)
-
 		return
 	}
 
-	r.ctx = *client
+	r.ctx = client
 }
 
 func (r *MssqlGrantResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+	if !ensureProviderReady("mssql_grant", r.ctx, &resp.Diagnostics) {
+		return
+	}
+
 	var data MssqlGrantResourceModel
 
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
@@ -281,6 +280,10 @@ func (r *MssqlGrantResource) Create(ctx context.Context, req resource.CreateRequ
 }
 
 func (r *MssqlGrantResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+	if !ensureProviderReady("mssql_grant", r.ctx, &resp.Diagnostics) {
+		return
+	}
+
 	var data MssqlGrantResourceModel
 
 	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
@@ -289,24 +292,34 @@ func (r *MssqlGrantResource) Read(ctx context.Context, req resource.ReadRequest,
 	}
 
 	database := data.Database.ValueString()
+	if !data.Id.IsNull() && !data.Id.IsUnknown() && data.Id.ValueString() != "" {
+		decoded, err := decodeGrantId(data.Id.ValueString())
+		if err != nil {
+			resp.Diagnostics.AddError("Invalid grant ID", err.Error())
+			return
+		}
+		if !ensureServerIDMatch("mssql_grant", decoded.ServerID, r.ctx.ServerID, &resp.Diagnostics) {
+			return
+		}
+	}
 	if data.Database.IsUnknown() || data.Database.IsNull() || database == "" {
 		decoded, err := decodeGrantId(data.Id.ValueString())
 		if err != nil {
 			resp.Diagnostics.AddError("Invalid grant ID", err.Error())
 			return
 		}
-		database = decoded.Database
-		if decoded.Principal != "" {
-			data.Principal = types.StringValue(decoded.Principal)
+		database = decoded.Grant.Database
+		if decoded.Grant.Principal != "" {
+			data.Principal = types.StringValue(decoded.Grant.Principal)
 		}
-		if decoded.Permission != "" {
-			data.Permission = types.StringValue(strings.ToUpper(decoded.Permission))
+		if decoded.Grant.Permission != "" {
+			data.Permission = types.StringValue(strings.ToUpper(decoded.Grant.Permission))
 		}
-		if decoded.ObjectType != "" {
-			data.ObjectType = types.StringValue(decoded.ObjectType)
+		if decoded.Grant.ObjectType != "" {
+			data.ObjectType = types.StringValue(decoded.Grant.ObjectType)
 		}
-		if decoded.ObjectName != "" {
-			data.ObjectName = types.StringValue(decoded.ObjectName)
+		if decoded.Grant.ObjectName != "" {
+			data.ObjectName = types.StringValue(decoded.Grant.ObjectName)
 		}
 	}
 
@@ -350,6 +363,10 @@ func (r *MssqlGrantResource) Read(ctx context.Context, req resource.ReadRequest,
 }
 
 func (r *MssqlGrantResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	if !ensureProviderReady("mssql_grant", r.ctx, &resp.Diagnostics) {
+		return
+	}
+
 	var data MssqlGrantResourceModel
 
 	// Read Terraform plan data into the model
@@ -361,6 +378,10 @@ func (r *MssqlGrantResource) Update(ctx context.Context, req resource.UpdateRequ
 }
 
 func (r *MssqlGrantResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+	if !ensureProviderReady("mssql_grant", r.ctx, &resp.Diagnostics) {
+		return
+	}
+
 	var data MssqlGrantResourceModel
 
 	// Read Terraform prior state data into the model
@@ -370,24 +391,34 @@ func (r *MssqlGrantResource) Delete(ctx context.Context, req resource.DeleteRequ
 	}
 
 	database := data.Database.ValueString()
+	if !data.Id.IsNull() && !data.Id.IsUnknown() && data.Id.ValueString() != "" {
+		decoded, err := decodeGrantId(data.Id.ValueString())
+		if err != nil {
+			resp.Diagnostics.AddError("Invalid grant ID", err.Error())
+			return
+		}
+		if !ensureServerIDMatch("mssql_grant", decoded.ServerID, r.ctx.ServerID, &resp.Diagnostics) {
+			return
+		}
+	}
 	if data.Database.IsUnknown() || data.Database.IsNull() || database == "" {
 		decoded, err := decodeGrantId(data.Id.ValueString())
 		if err != nil {
 			resp.Diagnostics.AddError("Invalid grant ID", err.Error())
 			return
 		}
-		database = decoded.Database
-		if data.Principal.IsNull() && decoded.Principal != "" {
-			data.Principal = types.StringValue(decoded.Principal)
+		database = decoded.Grant.Database
+		if data.Principal.IsNull() && decoded.Grant.Principal != "" {
+			data.Principal = types.StringValue(decoded.Grant.Principal)
 		}
-		if data.Permission.IsNull() && decoded.Permission != "" {
-			data.Permission = types.StringValue(strings.ToUpper(decoded.Permission))
+		if data.Permission.IsNull() && decoded.Grant.Permission != "" {
+			data.Permission = types.StringValue(strings.ToUpper(decoded.Grant.Permission))
 		}
-		if data.ObjectType.IsNull() && decoded.ObjectType != "" {
-			data.ObjectType = types.StringValue(decoded.ObjectType)
+		if data.ObjectType.IsNull() && decoded.Grant.ObjectType != "" {
+			data.ObjectType = types.StringValue(decoded.Grant.ObjectType)
 		}
-		if data.ObjectName.IsNull() && decoded.ObjectName != "" {
-			data.ObjectName = types.StringValue(decoded.ObjectName)
+		if data.ObjectName.IsNull() && decoded.Grant.ObjectName != "" {
+			data.ObjectName = types.StringValue(decoded.Grant.ObjectName)
 		}
 	}
 
@@ -400,17 +431,34 @@ func (r *MssqlGrantResource) Delete(ctx context.Context, req resource.DeleteRequ
 	}
 
 	if err := r.ctx.Client.RevokePermission(ctx, grant); err != nil {
-		resp.Diagnostics.AddError("Unable to revoke permission", fmt.Sprintf("Unable to revoke permission %s from principal %s", data.Permission.ValueString(), data.Principal.ValueString()))
+		resp.Diagnostics.AddError(
+			"Unable to revoke permission",
+			fmt.Sprintf(
+				"Unable to revoke permission %s from principal %s in database %s: %s",
+				data.Permission.ValueString(),
+				data.Principal.ValueString(),
+				database,
+				err,
+			),
+		)
 		return
 	}
 }
 
 func (r *MssqlGrantResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	grant, err := decodeGrantId(req.ID)
+	if !ensureProviderReady("mssql_grant", r.ctx, &resp.Diagnostics) {
+		return
+	}
+
+	grantID, err := decodeGrantId(req.ID)
 	if err != nil {
 		resp.Diagnostics.AddError("Invalid import ID", err.Error())
 		return
 	}
+	if !ensureServerIDMatch("mssql_grant", grantID.ServerID, r.ctx.ServerID, &resp.Diagnostics) {
+		return
+	}
+	grant := grantID.Grant
 	if grant.Database == "" || grant.Principal == "" || grant.Permission == "" {
 		resp.Diagnostics.AddError("Invalid import ID", "database, principal, and permission must not be empty")
 		return
